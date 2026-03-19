@@ -12,4 +12,7 @@
 - [Неделя 3](https://github.com/unica12/startup-group-8/tree/week3)</br>
 </br>
 
-- [Неделя 4](https://github.com/unica12/startup-group-8/tree/week4)
+- [Неделя 4](https://github.com/unica12/startup-group-8/tree/week4)</br>
+</br>
+
+- [Неделя 5](https://github.com/unica12/startup-group-8/tree/week5)
