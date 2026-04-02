@@ -10,9 +10,11 @@ from aiogram.types import Message
 
 from database.db import get_session
 from database.queries import get_monthly_stats, get_or_create_user, save_receipt
+from services.advisor import generate_mini_advice
 from services.categorizer import categorize_items
 from services.ocr import recognize_receipt
 from utils.formatting import format_date_ru, format_money, get_category_emoji
+from utils.keyboards import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -31,7 +33,7 @@ def _check_cooldown(user_id: int) -> Optional[int]:
     return None
 
 
-def _format_receipt_response(data: dict, monthly_stats: dict) -> str:
+def _format_receipt_response(data: dict, monthly_stats: dict, mini_advice: str) -> str:
     """Сформировать красивый ответ с распознанным чеком."""
     lines = ["✅ *Чек распознан!*", ""]
 
@@ -55,16 +57,10 @@ def _format_receipt_response(data: dict, monthly_stats: dict) -> str:
             category = item.get("category", "Другое")
             lines.append(f"• {emoji} {name} — {format_money(total)} [{category}]")
 
-    # Подсказка по самой дорогой позиции (>300 руб)
-    if items:
-        expensive = max(items, key=lambda x: x.get("total", 0))
-        if expensive.get("total", 0) > 300:
-            lines.append("")
-            lines.append(
-                f"💡 *Совет:* {expensive['name']} стоит "
-                f"{format_money(expensive['total'])}. "
-                "Поищи аналог дешевле или купи оптом."
-            )
+    # Мини-совет от GPT (только если есть)
+    if mini_advice:
+        lines.append("")
+        lines.append(f"💡 *Совет:* {mini_advice}")
 
     # Итог по месяцу
     monthly_total = monthly_stats.get("total_sum", 0.0)
@@ -95,32 +91,32 @@ async def handle_photo(message: Message, bot: Bot) -> None:
         )
         return
 
-    # Обновляем время последнего запроса
     _last_photo_time[user_id] = time.time()
 
-    # Сообщение-заглушка
     status_msg = await message.answer("🔍 Распознаю чек... подожди 3–5 секунд")
 
     try:
-        # Скачиваем фото в максимальном разрешении
+        # Скачиваем фото в максимальном разрешении (последний элемент = самый большой)
         photo = message.photo[-1]
         file = await bot.get_file(photo.file_id)
         file_bytes = await bot.download_file(file.file_path)
         image_bytes = file_bytes.read()
 
-        # Распознаём чек через Claude Vision
+        # Распознаём чек через OpenAI Vision
         receipt_data = await recognize_receipt(image_bytes)
 
         if not receipt_data.get("success"):
             reason = receipt_data.get("reason", "")
             if "не чек" in reason.lower() or "not a receipt" in reason.lower():
                 await status_msg.edit_text(
-                    "🤔 Это не похоже на чек. Отправь фото кассового чека."
+                    "🤔 Это не похоже на чек. Отправь фото кассового чека.",
+                    reply_markup=main_menu_keyboard(),
                 )
             else:
                 await status_msg.edit_text(
                     "😕 Не удалось распознать чек. "
-                    "Попробуй сделать фото ровнее и при хорошем освещении."
+                    "Попробуй сделать фото ровнее и при хорошем освещении.",
+                    reply_markup=main_menu_keyboard(),
                 )
             return
 
@@ -156,9 +152,15 @@ async def handle_photo(message: Message, bot: Bot) -> None:
 
             monthly_stats = await get_monthly_stats(session, user.id)
 
-        # Формируем и отправляем ответ
-        response_text = _format_receipt_response(receipt_data, monthly_stats)
-        await status_msg.edit_text(response_text, parse_mode="Markdown")
+        # Генерируем мини-совет через GPT (фильтрует обязательные расходы)
+        mini_advice = await generate_mini_advice(items)
+
+        response_text = _format_receipt_response(receipt_data, monthly_stats, mini_advice)
+        await status_msg.edit_text(
+            response_text,
+            parse_mode="Markdown",
+            reply_markup=main_menu_keyboard(),
+        )
 
         logger.info(
             f"Чек обработан: user_id={user_id} "
@@ -170,5 +172,6 @@ async def handle_photo(message: Message, bot: Bot) -> None:
     except Exception as e:
         logger.error(f"Ошибка обработки фото user_id={user_id}: {e}")
         await status_msg.edit_text(
-            "😕 Произошла ошибка при обработке чека. Попробуй ещё раз."
+            "😕 Произошла ошибка при обработке чека. Попробуй ещё раз.",
+            reply_markup=main_menu_keyboard(),
         )

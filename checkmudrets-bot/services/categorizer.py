@@ -9,11 +9,13 @@ import logging
 import re
 from typing import Any
 
-import openai
+from openai import AsyncOpenAI
 
 from utils.config import OPENAI_API_KEY, OPENAI_MODEL
 
 logger = logging.getLogger(__name__)
+
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
 CATEGORIZE_PROMPT = """Ты — система категоризации товаров из кассовых чеков. Для каждого товара определи категорию.
 
@@ -48,7 +50,7 @@ async def categorize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     items_json = json.dumps(items_for_api, ensure_ascii=False)
 
     try:
-        response = await openai.ChatCompletion.acreate(
+        response = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[
                 {
@@ -58,7 +60,6 @@ async def categorize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
             ],
             temperature=0,
             max_tokens=1024,
-            api_key=OPENAI_API_KEY,
         )
 
         raw_text = response.choices[0].message.content
@@ -74,7 +75,7 @@ async def categorize_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
         # Обновляем категории в исходных позициях
         for item in items:
-            if not item.get("category") or item["category"] == "Другое":
+            if not item.get("category") or item.get("category") == "Другое":
                 item["category"] = category_map.get(item["name"], "Другое")
 
         logger.info(f"Категоризировано {len(items)} позиций")

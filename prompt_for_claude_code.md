@@ -11,6 +11,8 @@
 
 Бот должен быть **готов к запуску** после `pip install` и заполнения `.env`.
 
+**ВАЖНО: НЕ ТРОГАЙ файл README.md — он уже существует и содержит навигацию по репозиторию. Всю документацию пиши в файл DOCS.md.**
+
 ---
 
 ## АРХИТЕКТУРА ПРОЕКТА
@@ -28,9 +30,9 @@ checkmudrets-bot/
 │   └── report.py       # /report — еженедельный отчёт
 ├── services/
 │   ├── __init__.py
-│   ├── ocr.py          # Распознавание чека через Claude Vision API
-│   ├── categorizer.py  # Категоризация позиций через Claude API
-│   ├── advisor.py      # Генерация советов по экономии через Claude API
+│   ├── ocr.py          # Распознавание чека через OpenAI GPT-4o-mini Vision
+│   ├── categorizer.py  # Категоризация позиций (fallback)
+│   ├── advisor.py      # Генерация советов по экономии
 │   └── reporter.py     # Формирование текстового отчёта
 ├── database/
 │   ├── __init__.py
@@ -43,7 +45,7 @@ checkmudrets-bot/
 │   └── formatting.py   # Форматирование сообщений, эмодзи, markdown
 ├── .env.example        # Шаблон переменных окружения
 ├── requirements.txt    # Зависимости
-├── README.md           # Документация проекта
+├── DOCS.md             # Документация проекта (НЕ README.md!)
 └── .gitignore          # Стандартный Python + .env
 ```
 
@@ -54,11 +56,11 @@ checkmudrets-bot/
 | Компонент | Технология | Почему |
 |-----------|-----------|--------|
 | Telegram-бот | `aiogram 3.x` | Асинхронный, современный, активно поддерживается |
-| OCR + парсинг чека | `Anthropic Claude API` (модель claude-sonnet-4-20250514 с vision) | Отправляем фото чека → получаем структурированный JSON. Один вызов заменяет OCR + парсинг |
-| Категоризация + советы | `Anthropic Claude API` | Анализ привычек, генерация персональных советов на русском |
+| OCR + парсинг чека | `OpenAI GPT-4o-mini` (с vision) | Отправляем фото чека → получаем структурированный JSON. Один вызов заменяет OCR + парсинг. Дёшево: $0.15/1M input, $0.60/1M output |
+| Категоризация + советы | `OpenAI GPT-4o-mini` | Анализ привычек, генерация персональных советов на русском |
 | База данных | `SQLite` + `SQLAlchemy 2.0` (async через `aiosqlite`) | Просто, не нужен сервер, достаточно для MVP |
 | Конфиг | `python-dotenv` | Переменные окружения из .env |
-| HTTP-клиент | `anthropic` (официальный SDK) | Для вызовов Claude API |
+| HTTP-клиент | `openai` (официальный SDK) | Для вызовов OpenAI API |
 
 ---
 
@@ -136,7 +138,7 @@ class Item:
 1. Отправить сообщение-заглушку: "🔍 Распознаю чек... подожди 3–5 секунд"
 2. Скачать фото в максимальном разрешении (file_id последнего photo size)
 3. Конвертировать в base64
-4. Вызвать `services/ocr.py` → отправить в Claude Vision API
+4. Вызвать `services/ocr.py` → отправить в OpenAI GPT-4o-mini Vision
 5. Получить JSON с данными чека
 6. Вызвать `services/categorizer.py` → категоризировать позиции
 7. Сохранить в БД: Receipt + Items
@@ -169,14 +171,52 @@ class Item:
 - Если не удалось распознать → "😕 Не удалось распознать чек. Попробуй сделать фото ровнее и при хорошем освещении."
 - Если фото не чека (еда, селфи и т.д.) → "🤔 Это не похоже на чек. Отправь фото кассового чека."
 
-### 4. `services/ocr.py` — Распознавание чека через Claude Vision
+### 4. `services/ocr.py` — Распознавание чека через OpenAI GPT-4o-mini Vision
 
-**Один вызов Claude API заменяет OCR + парсер:**
+**Один вызов OpenAI API заменяет OCR + парсер + категоризатор:**
 
-Отправить изображение (base64) в Claude claude-sonnet-4-20250514 с промптом:
+Используй `openai.AsyncOpenAI` клиент. Отправь изображение (base64) в GPT-4o-mini:
+
+```python
+from openai import AsyncOpenAI
+
+client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+response = await client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT  # см. ниже
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:image/jpeg;base64,{base64_image}",
+                        "detail": "high"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": "Распознай этот кассовый чек."
+                }
+            ]
+        }
+    ],
+    max_tokens=2000,
+    temperature=0.1
+)
+
+result_text = response.choices[0].message.content
+```
+
+**Системный промпт для OCR + категоризация (в одном вызове):**
 
 ```
-Ты — система распознавания кассовых чеков. Проанализируй фото чека и верни ТОЛЬКО валидный JSON без markdown-разметки.
+Ты — система распознавания кассовых чеков. Проанализируй фото чека и верни ТОЛЬКО валидный JSON без markdown-разметки, без ```json блоков.
 
 Формат ответа:
 {
@@ -188,11 +228,15 @@ class Item:
       "name": "Название товара",
       "quantity": 1.0,
       "price": 100.00,
-      "total": 100.00
+      "total": 100.00,
+      "category": "Продукты"
     }
   ],
   "total": 500.00
 }
+
+Доступные категории для поля category:
+Продукты, Молочные, Мясо, Овощи/Фрукты, Хлеб, Напитки, Алкоголь, Кофе, Сладости, Снеки, Готовая еда, Доставка еды, Кафе/Рестораны, Бытовая химия, Гигиена, Косметика, Одежда, Обувь, Электроника, Техника, Канцелярия, Книги, Игрушки, Зоотовары, Лекарства, Спорт, Транспорт, Топливо, Подписки, Развлечения, Связь/Интернет, ЖКХ, Ремонт, Мебель, Другое
 
 Правила:
 - Если чек нечитаемый или это не чек — верни {"success": false, "reason": "описание проблемы"}
@@ -202,13 +246,40 @@ class Item:
 - quantity по умолчанию 1.0, если не указано
 - total = quantity × price (пересчитай, если не совпадает)
 - Если итого не видно — посчитай сумму items
+- Для каждого товара определи наиболее подходящую категорию из списка
 ```
 
-Парсим JSON из ответа. Если `success: false` — возвращаем ошибку.
+Парсим JSON из ответа. GPT-4o-mini может обернуть ответ в ```json...``` — **всегда чисти** перед json.loads():
 
-### 5. `services/categorizer.py` — Категоризация позиций
+```python
+import re, json
 
-**Вызов Claude API с промптом:**
+def parse_json_response(text: str) -> dict:
+    """Извлекает JSON из ответа GPT, даже если обёрнут в markdown."""
+    cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip())
+    cleaned = re.sub(r'\s*```$', '', cleaned)
+    return json.loads(cleaned)
+```
+
+### 5. `services/categorizer.py` — Категоризация (FALLBACK)
+
+Этот модуль вызывается **только если OCR-промпт не вернул категории** в items.
+
+**Вызов OpenAI API:**
+
+```python
+response = await client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": CATEGORIZER_PROMPT},
+        {"role": "user", "content": json.dumps(items_list, ensure_ascii=False)}
+    ],
+    max_tokens=1000,
+    temperature=0.1
+)
+```
+
+**Промпт:**
 
 ```
 Ты — система категоризации товаров из кассовых чеков. Для каждого товара определи категорию.
@@ -216,24 +287,33 @@ class Item:
 Доступные категории:
 Продукты, Молочные, Мясо, Овощи/Фрукты, Хлеб, Напитки, Алкоголь, Кофе, Сладости, Снеки, Готовая еда, Доставка еды, Кафе/Рестораны, Бытовая химия, Гигиена, Косметика, Одежда, Обувь, Электроника, Техника, Канцелярия, Книги, Игрушки, Зоотовары, Лекарства, Спорт, Транспорт, Топливо, Подписки, Развлечения, Связь/Интернет, ЖКХ, Ремонт, Мебель, Другое
 
-Вход (JSON):
+Вход (JSON массив):
 [{"name": "Молоко 1л", "price": 89}, {"name": "Бензин АИ-95", "price": 2800}]
 
-Ответ — ТОЛЬКО JSON без markdown:
+Ответ — ТОЛЬКО JSON массив без markdown:
 [{"name": "Молоко 1л", "category": "Молочные"}, {"name": "Бензин АИ-95", "category": "Топливо"}]
 ```
 
-**Оптимизация:** Объединить OCR + категоризацию в один вызов Claude API. В промпте OCR добавить поле `category` в items. Это сэкономит один API-вызов и ускорит обработку. Если так — файл categorizer.py становится запасным (вызывается только если OCR-промпт не вернул категории).
-
 ### 6. `services/advisor.py` — Советы по экономии
 
-**Вызов Claude API с историей трат пользователя:**
+**Вызов OpenAI API с историей трат пользователя:**
+
+```python
+response = await client.chat.completions.create(
+    model="gpt-4o-mini",
+    messages=[
+        {"role": "system", "content": ADVISOR_PROMPT},
+        {"role": "user", "content": json.dumps(spending_data, ensure_ascii=False)}
+    ],
+    max_tokens=1000,
+    temperature=0.7
+)
+```
+
+**Промпт:**
 
 ```
 Ты — финансовый советник, помогающий людям экономить деньги. Проанализируй расходы пользователя и дай 3–5 конкретных советов.
-
-Расходы за последние 30 дней:
-{json_с_расходами_по_категориям}
 
 Правила:
 - Каждый совет должен содержать конкретную сумму экономии
@@ -241,6 +321,7 @@ class Item:
 - Тон — дружелюбный, без нравоучений
 - Формат: эмодзи + совет + сумма
 - Если данных мало (менее 5 чеков) — скажи, что нужно больше данных для точного анализа, но дай общие советы
+- Отвечай ТОЛЬКО текстом советов, без вступлений и заключений
 
 Пример хорошего совета:
 ☕ Ты покупаешь кофе 12 раз в месяц на ~3 600 руб. Термос с домашним кофе сэкономит ~2 800 руб./мес.
@@ -291,7 +372,7 @@ class Item:
 
 ### 9. `handlers/report.py` — Команда /report
 
-Еженедельный отчёт (ручной вызов через /report, позже можно автоматизировать по крону):
+Еженедельный отчёт (ручной вызов через /report):
 
 Собрать данные за последние 7 дней → отправить в `services/reporter.py` → сгенерировать отчёт → отправить пользователю.
 
@@ -319,19 +400,19 @@ import os
 
 load_dotenv()
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")            # Telegram Bot Token
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")  # Anthropic API Key
+BOT_TOKEN = os.getenv("BOT_TOKEN")                  # Telegram Bot Token
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")         # OpenAI API Key
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///checkmudrets.db")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-20250514")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 ```
 
 ### 11. `.env.example`
 
 ```
 BOT_TOKEN=your_telegram_bot_token_here
-ANTHROPIC_API_KEY=your_anthropic_api_key_here
+OPENAI_API_KEY=your_openai_api_key_here
 DATABASE_URL=sqlite+aiosqlite:///checkmudrets.db
-CLAUDE_MODEL=claude-sonnet-4-20250514
+OPENAI_MODEL=gpt-4o-mini
 ```
 
 ### 12. `utils/formatting.py`
@@ -364,7 +445,7 @@ CATEGORY_EMOJI = {
 
 ```
 aiogram>=3.4.0
-anthropic>=0.40.0
+openai>=1.30.0
 sqlalchemy>=2.0.0
 aiosqlite>=0.19.0
 python-dotenv>=1.0.0
@@ -388,13 +469,15 @@ venv/
 
 ---
 
-## README.MD — ДОКУМЕНТАЦИЯ
+## DOCS.MD — ДОКУМЕНТАЦИЯ
 
-Напиши полноценный README.md со следующей структурой:
+**ВАЖНО: Пиши документацию в DOCS.md, НЕ в README.md!**
 
-### Структура README:
+Напиши полноценный DOCS.md со следующей структурой:
 
-1. **Заголовок + бейджи**: Название «ЧекМудрец», описание в одну строку, бейджи (Python 3.11+, aiogram 3, Claude API, License MIT)
+### Структура DOCS.md:
+
+1. **Заголовок + бейджи**: Название «ЧекМудрец», описание в одну строку, бейджи (Python 3.11+, aiogram 3, OpenAI GPT-4o-mini, License MIT)
 
 2. **О проекте**: 3–4 предложения — что делает бот, какую проблему решает, для кого
 
@@ -448,12 +531,14 @@ venv/
 2. **Type hints** везде. Используй `from __future__ import annotations` где нужно.
 3. **Обработка ошибок**: каждый API-вызов обёрнут в try/except. Пользователь никогда не видит трейсбек. При ошибке — понятное сообщение.
 4. **Логирование**: `import logging`, уровень INFO для основных событий, ERROR для ошибок. Логировать каждый распознанный чек (user_id, сумма, кол-во позиций).
-5. **Один API-вызов для OCR + категоризация**: объедини распознавание и категоризацию в один промпт Claude Vision. Categorizer.py — fallback.
-6. **Парсинг JSON из Claude**: Claude может вернуть JSON в markdown-блоке (```json...```). Всегда чисти ответ перед json.loads().
+5. **Один API-вызов для OCR + категоризация**: объедини распознавание и категоризацию в один промпт GPT-4o-mini Vision. Categorizer.py — fallback.
+6. **Парсинг JSON из GPT**: модель может вернуть JSON в markdown-блоке (```json...```). Всегда чисти ответ перед json.loads().
 7. **Комментарии в коде** — на русском языке.
 8. **Модульность**: каждый файл — одна ответственность. Не больше 150 строк на файл.
 9. **Graceful shutdown**: корректное завершение при Ctrl+C.
 10. **Rate limiting**: не чаще 1 фото в 5 секунд от одного пользователя (простой cooldown).
+11. **OpenAI клиент**: используй `openai.AsyncOpenAI` для асинхронных вызовов.
+12. **НЕ ТРОГАЙ README.md** — документация идёт в DOCS.md.
 
 ---
 
@@ -486,10 +571,11 @@ python bot.py
 - [ ] /advice даёт советы (или просит отсканировать больше чеков)
 - [ ] /history показывает список чеков
 - [ ] /report генерирует отчёт
-- [ ] README.md полный и красиво отображается на GitHub
+- [ ] DOCS.md полный и красиво отображается на GitHub
 - [ ] .gitignore включает .env и __pycache__
 - [ ] Нет хардкода токенов в коде
+- [ ] README.md НЕ изменён
 
 ---
 
-Создай все файлы. Начни с `database/models.py` и `database/db.py`, затем `services/`, затем `handlers/`, затем `bot.py`, и в конце `README.md`. Пиши сразу рабочий код, не заглушки.
+Создай все файлы. Начни с `database/models.py` и `database/db.py`, затем `services/`, затем `handlers/`, затем `bot.py`, и в конце `DOCS.md`. Пиши сразу рабочий код, не заглушки.

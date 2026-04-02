@@ -9,7 +9,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from database.db import close_db, init_db
-import handlers
+from handlers import start, receipt, stats, advice, history, report, callbacks
 from utils.config import BOT_TOKEN, validate_config
 
 # Настройка логирования
@@ -33,12 +33,13 @@ async def main() -> None:
     dp = Dispatcher()
 
     # Подключаем роутеры
-    dp.include_router(handlers.start.router)
-    dp.include_router(handlers.receipt.router)
-    dp.include_router(handlers.stats.router)
-    dp.include_router(handlers.advice.router)
-    dp.include_router(handlers.history.router)
-    dp.include_router(handlers.report.router)
+    dp.include_router(start.router)
+    dp.include_router(receipt.router)
+    dp.include_router(stats.router)
+    dp.include_router(advice.router)
+    dp.include_router(history.router)
+    dp.include_router(report.router)
+    dp.include_router(callbacks.router)
 
     # Инициализируем базу данных
     await init_db()

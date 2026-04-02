@@ -9,6 +9,7 @@ from aiogram.types import Message
 
 from database.db import get_session
 from database.queries import get_or_create_user
+from utils.keyboards import main_menu_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -61,7 +62,7 @@ async def cmd_start(message: Message) -> None:
         )
 
     logger.info(f"Пользователь {message.from_user.id} запустил бота")
-    await message.answer(WELCOME_TEXT, parse_mode="Markdown")
+    await message.answer(WELCOME_TEXT, parse_mode="Markdown", reply_markup=main_menu_keyboard())
 
 
 @router.message(Command("help"))

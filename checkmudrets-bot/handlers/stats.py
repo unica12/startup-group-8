@@ -10,6 +10,7 @@ from aiogram.types import Message
 from database.db import get_session
 from database.queries import get_monthly_stats, get_user_by_telegram_id
 from utils.formatting import format_money, get_category_emoji
+from utils.keyboards import back_keyboard
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -41,7 +42,6 @@ def _build_stats_message(stats: dict) -> str:
         "📂 *По категориям:*",
     ]
 
-    # Сортируем категории по убыванию суммы
     sorted_categories = sorted(by_category.items(), key=lambda x: x[1], reverse=True)
 
     for category, amount in sorted_categories:
@@ -60,22 +60,22 @@ def _build_stats_message(stats: dict) -> str:
     return "\n".join(lines)
 
 
+async def get_stats_text(user_id: int) -> str:
+    """Получить текст статистики для пользователя. Используется в /stats и callback."""
+    async with get_session() as session:
+        user = await get_user_by_telegram_id(session, user_id)
+        if user is None:
+            return "👋 Сначала запусти бота командой /start и отсканируй хотя бы один чек."
+        stats = await get_monthly_stats(session, user.id)
+    return _build_stats_message(stats)
+
+
 @router.message(Command("stats"))
 async def cmd_stats(message: Message) -> None:
     """Обработать команду /stats."""
     if message.from_user is None:
         return
 
-    async with get_session() as session:
-        user = await get_user_by_telegram_id(session, message.from_user.id)
-        if user is None:
-            await message.answer(
-                "👋 Сначала запусти бота командой /start и отсканируй хотя бы один чек."
-            )
-            return
-
-        stats = await get_monthly_stats(session, user.id)
-
-    text = _build_stats_message(stats)
-    await message.answer(text, parse_mode="Markdown")
+    text = await get_stats_text(message.from_user.id)
+    await message.answer(text, parse_mode="Markdown", reply_markup=back_keyboard())
     logger.info(f"Пользователь {message.from_user.id} запросил статистику")
