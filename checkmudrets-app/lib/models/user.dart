@@ -14,10 +14,12 @@ class User {
 
   factory User.fromJson(Map<String, dynamic> json) {
     return User(
-      userId: json['user_id'] as int,
+      userId: (json['user_id'] as num?)?.toInt() ?? 0,
       deviceId: json['device_id'] as String,
       name: json['name'] as String?,
-      createdAt: DateTime.parse(json['created_at'] as String),
+      createdAt: json['created_at'] != null
+          ? DateTime.parse(json['created_at'] as String)
+          : DateTime.now(),
     );
   }
 }

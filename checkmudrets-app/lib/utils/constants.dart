@@ -4,10 +4,11 @@ import 'package:flutter/foundation.dart';
 class ApiConstants {
   // Для Android-эмулятора: 10.0.2.2 = localhost хоста
   // Для реального телефона в той же сети: замени на IP-адрес компьютера
-  static const String baseUrl = String.fromEnvironment(
-    'API_URL',
-    defaultValue: kIsWeb ? 'http://localhost:8000' : 'http://10.0.2.2:8000',
-  );
+  static String get baseUrl {
+    const envUrl = String.fromEnvironment('API_URL');
+    if (envUrl.isNotEmpty) return envUrl;
+    return kIsWeb ? 'http://localhost:8000' : 'http://10.0.2.2:8000';
+  }
 
   static const timeout = Duration(seconds: 30);
   static const uploadTimeout = Duration(seconds: 120); // OCR занимает время

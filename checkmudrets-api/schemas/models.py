@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
@@ -15,12 +15,12 @@ class RegisterRequest(BaseModel):
 
 
 class UserResponse(BaseModel):
-    user_id: int
+    user_id: int = Field(alias="id")
     device_id: str
     name: Optional[str]
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
 
 
 # ─── Items / Receipts ─────────────────────────────────────────────────────────

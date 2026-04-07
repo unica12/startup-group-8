@@ -30,6 +30,7 @@ async def get_or_create_user(
         user = User(device_id=device_id, name=name)
         session.add(user)
         await session.flush()
+        await session.refresh(user)
         logger.info(f"Создан новый пользователь: device_id={device_id}")
 
     return user
