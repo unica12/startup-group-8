@@ -7,7 +7,7 @@ class ApiConstants {
   static String get baseUrl {
     const envUrl = String.fromEnvironment('API_URL');
     if (envUrl.isNotEmpty) return envUrl;
-    return kIsWeb ? 'http://localhost:8000' : 'http://10.0.2.2:8000';
+    return kIsWeb ? 'http://localhost:8000' : 'http://172.20.10.4:8000';
   }
 
   static const timeout = Duration(seconds: 30);

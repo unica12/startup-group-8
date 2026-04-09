@@ -21,46 +21,53 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
 
-# Разрешённые MIME-типы изображений
-ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp", "image/heic"}
+ALLOWED_CONTENT_TYPES = {
+    "image/jpeg",
+    "image/jpg",
+    "image/png",
+    "image/webp",
+    "image/heic",
+    "image/heif",
+    "application/octet-stream",
+}
 
 
 @router.post("", response_model=UploadReceiptResponse)
 async def upload_receipt(
-    file: UploadFile = File(..., description="Фото чека (jpeg/png)"),
-    device_id: str = Form(..., description="Идентификатор устройства"),
+    file: UploadFile = File(...),
+    device_id: str = Form(...),
     session: AsyncSession = Depends(get_session),
 ) -> UploadReceiptResponse:
-    """
-    Загрузить фото чека, распознать через OCR и сохранить в БД.
 
-    Принимает multipart/form-data: file + device_id.
-    """
-    # Проверяем тип файла
-    if file.content_type and file.content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Неподдерживаемый тип файла: {file.content_type}. Используй jpeg или png.",
-        )
+    logger.info(
+        f"Загрузка чека | device_id={device_id!r} "
+        f"filename={file.filename!r} "
+        f"content_type={file.content_type!r}"
+    )
 
-    # Читаем байты изображения
     image_bytes = await file.read()
+
     if not image_bytes:
         raise HTTPException(status_code=400, detail="Файл пустой")
 
-    # Получаем или создаём пользователя
+    if file.content_type and file.content_type not in ALLOWED_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Неподдерживаемый тип файла: {file.content_type}",
+        )
+
     user = await get_or_create_user(session=session, device_id=device_id)
 
-    # Распознаём чек через OCR
     ocr_result = await recognize_receipt(image_bytes)
 
     if not ocr_result.get("success"):
-        reason = ocr_result.get("reason", "Не удалось распознать чек")
-        logger.warning(f"OCR не распознал чек: {reason} | device_id={device_id}")
-        return UploadReceiptResponse(success=False, error=reason)
+        return UploadReceiptResponse(
+            success=False,
+            error=ocr_result.get("reason", "Ошибка OCR"),
+        )
 
-    # Сохраняем чек в БД
     items_data = ocr_result.get("items", [])
+
     receipt = await save_receipt(
         session=session,
         user_id=user.id,
@@ -71,20 +78,19 @@ async def upload_receipt(
         raw_text="",
     )
 
-    # Генерируем мини-совет по чеку
     mini_advice = await generate_mini_advice(items_data)
 
-    # Формируем ответ
+    # ✅ ИСПРАВЛЕНИЕ ЗДЕСЬ
     items_response = [
         ItemResponse(
-            id=item.id,
-            name=item.name,
-            quantity=item.quantity,
-            price=item.price,
-            total=item.total,
-            category=item.category,
+            id=0,  # временно, чтобы не ломать схему
+            name=item["name"],
+            quantity=item["quantity"],
+            price=item["price"],
+            total=item["total"],
+            category=item["category"],
         )
-        for item in receipt.items
+        for item in items_data
     ]
 
     receipt_response = ReceiptResponse(
@@ -94,11 +100,6 @@ async def upload_receipt(
         total=receipt.total,
         items=items_response,
         created_at=receipt.created_at,
-    )
-
-    logger.info(
-        f"Чек сохранён: id={receipt.id} user_id={user.id} "
-        f"магазин={receipt.store_name} сумма={receipt.total}"
     )
 
     return UploadReceiptResponse(
@@ -114,11 +115,7 @@ async def get_receipts(
     limit: int = 10,
     session: AsyncSession = Depends(get_session),
 ) -> ReceiptsListResponse:
-    """
-    Получить историю чеков пользователя.
 
-    Query-параметры: device_id, limit (по умолчанию 10).
-    """
     user = await get_or_create_user(session=session, device_id=device_id)
     receipts = await get_last_receipts(session=session, user_id=user.id, limit=limit)
 
