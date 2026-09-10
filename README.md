@@ -1,39 +1,22 @@
-# Навигация
-</br>
-</br>
+# Стартап в информационных технологиях
+
+### Команда №8
+
+---
+
+## 👥 Наша команда
+
+- **Земсков А.В.**
+- **Викторов А.Д.**
+- **Демидов И.С.**
 
 
-- [Неделя 1](https://github.com/unica12/startup-group-8/tree/week1)</br>
-</br>
+> Группа ЭФБО-06-23
 
-- [Неделя 2](https://github.com/unica12/startup-group-8/tree/week2)</br>
-</br>
+---
 
-- [Неделя 3](https://github.com/unica12/startup-group-8/tree/week3)</br>
-</br>
+# Неделя 1/2. Товарный знак и брендирование
 
-- [Неделя 4](https://github.com/unica12/startup-group-8/tree/week4)</br>
-</br>
 
-- [Неделя 5](https://github.com/unica12/startup-group-8/tree/week5)</br>
-</br>
 
-- [Неделя 6](https://github.com/unica12/startup-group-8/tree/week6)</br>
-</br>
-
-- [Неделя 7](https://github.com/unica12/startup-group-8/tree/week7)</br>
-</br>
-
-- [Неделя 8](https://github.com/unica12/startup-group-8/tree/week8)</br>
-</br>
-
-- [Неделя 9](https://github.com/unica12/startup-group-8/tree/week9)</br>
-</br>
-
-- [Неделя 10](https://github.com/unica12/startup-group-8/tree/week10)</br>
-</br>
-
-- [Неделя 11](https://github.com/unica12/startup-group-8/tree/week11)</br>
-</br>
-
-- [Неделя 12](https://github.com/unica12/startup-group-8/tree/week12)
+<img width="2810" height="1976" alt="Brand Board ЧекМудрец-selection" src="https://github.com/user-attachments/assets/685f463b-54e2-453c-83c8-1bb88b0fe48f" />
