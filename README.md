@@ -40,11 +40,6 @@
 - [Неделя 12](https://github.com/unica12/startup-group-8/tree/week12)</br>
 </br>
 
-- [Неделя 13](https://github.com/unica12/startup-group-8/tree/week13)</br>
-</br>
-
-- [Неделя 14](https://github.com/unica12/startup-group-8/tree/week14)</br>
-</br>
 
 
 2 Часть:
