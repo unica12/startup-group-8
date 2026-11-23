@@ -5,7 +5,7 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Item, Receipt, User
@@ -109,19 +109,17 @@ async def get_monthly_stats(
     month: int,
 ) -> dict:
     """Получить статистику за указанный месяц (год + номер месяца)."""
-    month_start = date(year, month, 1)
-    # Первый день следующего месяца
-    if month == 12:
-        month_end = date(year + 1, 1, 1)
-    else:
-        month_end = date(year, month + 1, 1)
+    # Фильтруем по created_at (дата сканирования), а не по OCR-дате чека —
+    # OCR часто ошибается с годом на старых чеках
+    month_start_dt = datetime(year, month, 1)
+    month_end_dt = datetime(year + 1, 1, 1) if month == 12 else datetime(year, month + 1, 1)
 
     # Общая сумма и количество чеков
     result = await session.execute(
         select(func.sum(Receipt.total), func.count(Receipt.id))
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= month_start)
-        .where(Receipt.date < month_end)
+        .where(Receipt.created_at >= month_start_dt)
+        .where(Receipt.created_at < month_end_dt)
     )
     row = result.one()
     total_sum = row[0] or 0.0
@@ -132,8 +130,8 @@ async def get_monthly_stats(
         select(Item.category, func.sum(Item.total))
         .join(Receipt, Item.receipt_id == Receipt.id)
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= month_start)
-        .where(Receipt.date < month_end)
+        .where(Receipt.created_at >= month_start_dt)
+        .where(Receipt.created_at < month_end_dt)
         .group_by(Item.category)
         .order_by(func.sum(Item.total).desc())
     )
@@ -147,8 +145,8 @@ async def get_monthly_stats(
         select(Item.name, Item.total, Item.category)
         .join(Receipt, Item.receipt_id == Receipt.id)
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= month_start)
-        .where(Receipt.date < month_end)
+        .where(Receipt.created_at >= month_start_dt)
+        .where(Receipt.created_at < month_end_dt)
         .order_by(Item.total.desc())
         .limit(1)
     )
@@ -170,14 +168,17 @@ async def get_weekly_stats(
 ) -> dict:
     """Получить статистику за последние 7 дней."""
     today = date.today()
-    week_start = today - timedelta(days=6)
-    prev_week_start = week_start - timedelta(days=7)
+    today_dt = datetime.combine(today, datetime.min.time())
+    week_start_dt = today_dt - timedelta(days=6)
+    prev_week_start_dt = week_start_dt - timedelta(days=7)
+    tomorrow_dt = today_dt + timedelta(days=1)
 
-    # Текущая неделя
+    # Текущая неделя — фильтр по created_at, не по OCR-дате
     result = await session.execute(
         select(func.sum(Receipt.total), func.count(Receipt.id))
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= week_start)
+        .where(Receipt.created_at >= week_start_dt)
+        .where(Receipt.created_at < tomorrow_dt)
     )
     row = result.one()
     total_sum = row[0] or 0.0
@@ -187,8 +188,8 @@ async def get_weekly_stats(
     result = await session.execute(
         select(func.sum(Receipt.total))
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= prev_week_start)
-        .where(Receipt.date < week_start)
+        .where(Receipt.created_at >= prev_week_start_dt)
+        .where(Receipt.created_at < week_start_dt)
     )
     prev_total = result.scalar() or 0.0
 
@@ -197,7 +198,8 @@ async def get_weekly_stats(
         select(Item.category, func.sum(Item.total))
         .join(Receipt, Item.receipt_id == Receipt.id)
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= week_start)
+        .where(Receipt.created_at >= week_start_dt)
+        .where(Receipt.created_at < tomorrow_dt)
         .group_by(Item.category)
         .order_by(func.sum(Item.total).desc())
         .limit(3)
@@ -213,7 +215,7 @@ async def get_weekly_stats(
         "receipts_count": receipts_count,
         "top_categories": top_categories,
         "change_pct": change_pct,
-        "week_start": week_start,
+        "week_start": today - timedelta(days=6),
         "week_end": today,
     }
 
@@ -222,13 +224,13 @@ async def get_expenses_for_advice(
     session: AsyncSession, user_id: int, days: int = 30
 ) -> dict:
     """Получить расходы по категориям за N дней для советника."""
-    since = date.today() - timedelta(days=days)
+    since_dt = datetime.combine(date.today() - timedelta(days=days), datetime.min.time())
 
     result = await session.execute(
         select(Item.category, func.sum(Item.total), func.count(Item.id))
         .join(Receipt, Item.receipt_id == Receipt.id)
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= since)
+        .where(Receipt.created_at >= since_dt)
         .group_by(Item.category)
         .order_by(func.sum(Item.total).desc())
     )
@@ -237,7 +239,7 @@ async def get_expenses_for_advice(
     total_receipts_result = await session.execute(
         select(func.count(Receipt.id))
         .where(Receipt.user_id == user_id)
-        .where(Receipt.date >= since)
+        .where(Receipt.created_at >= since_dt)
     )
     total_receipts = total_receipts_result.scalar() or 0
 

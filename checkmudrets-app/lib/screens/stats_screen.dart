@@ -38,11 +38,13 @@ class _StatsScreenState extends State<StatsScreen> {
       final prefs = await SharedPreferences.getInstance();
       final deviceId = prefs.getString(PrefKeys.deviceId) ?? '';
       final stats = await ApiService().getStats(deviceId);
+      if (!mounted) return;
       setState(() {
         _stats = stats;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = 'Ошибка загрузки: $e';
         _loading = false;

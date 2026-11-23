@@ -37,11 +37,13 @@ class _HistoryScreenState extends State<HistoryScreen> {
       final prefs = await SharedPreferences.getInstance();
       final deviceId = prefs.getString(PrefKeys.deviceId) ?? '';
       final receipts = await ApiService().getReceipts(deviceId, limit: 50);
+      if (!mounted) return;
       setState(() {
         _receipts = receipts;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = 'Ошибка загрузки: $e';
         _loading = false;

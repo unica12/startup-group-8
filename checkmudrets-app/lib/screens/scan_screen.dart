@@ -9,9 +9,11 @@ import '../utils/constants.dart';
 import '../widgets/loading_widget.dart';
 import 'scan_result_screen.dart';
 
-/// Экран сканирования чека — открывает камеру и отправляет фото на сервер.
+/// Экран сканирования чека — отправляет фото на сервер.
 class ScanScreen extends StatefulWidget {
-  const ScanScreen({super.key});
+  final ImageSource? initialSource;
+
+  const ScanScreen({super.key, this.initialSource});
 
   @override
   State<ScanScreen> createState() => _ScanScreenState();
@@ -24,8 +26,12 @@ class _ScanScreenState extends State<ScanScreen> {
   @override
   void initState() {
     super.initState();
-    // Автоматически открываем камеру при входе на экран
-    WidgetsBinding.instance.addPostFrameCallback((_) => _pickAndUpload());
+    // Авто-запуск если источник передан снаружи (из BottomSheet на главной)
+    if (widget.initialSource != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _pickAndUpload(source: widget.initialSource!),
+      );
+    }
   }
 
   Future<void> _pickAndUpload({ImageSource source = ImageSource.camera}) async {

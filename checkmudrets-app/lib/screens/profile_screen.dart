@@ -40,6 +40,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
       // Загружаем статистику для отображения в профиле
       if (_deviceId.isNotEmpty) {
         final stats = await ApiService().getStats(_deviceId);
+        if (!mounted) return;
         setState(() {
           _receiptsCount = stats.receiptsCount;
           _totalSpent = stats.totalSpent;

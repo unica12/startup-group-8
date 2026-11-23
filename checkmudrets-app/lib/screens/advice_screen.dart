@@ -34,11 +34,13 @@ class _AdviceScreenState extends State<AdviceScreen> {
       final prefs = await SharedPreferences.getInstance();
       final deviceId = prefs.getString(PrefKeys.deviceId) ?? '';
       final advice = await ApiService().getAdvice(deviceId);
+      if (!mounted) return;
       setState(() {
         _advice = advice;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = 'Не удалось загрузить советы: $e';
         _loading = false;

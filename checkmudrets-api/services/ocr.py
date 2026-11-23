@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import re
@@ -9,12 +10,36 @@ from datetime import date
 from typing import Optional
 
 from openai import AsyncOpenAI
+from PIL import Image
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+    logging.getLogger(__name__).info("pillow-heif зарегистрирован — HEIC поддерживается")
+except ImportError:
+    pass  # HEIC не поддерживается, но JPEG/PNG/WebP работают
 
 from utils.config import OPENAI_API_KEY, OPENAI_MODEL
 
 logger = logging.getLogger(__name__)
 
 client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+
+def _to_jpeg(image_bytes: bytes) -> bytes:
+    """Конвертирует любой формат (HEIC, PNG, WebP…) в JPEG для GPT Vision."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=90)
+        jpeg_bytes = out.getvalue()
+        logger.info(f"Изображение конвертировано в JPEG: {len(image_bytes)} → {len(jpeg_bytes)} байт")
+        return jpeg_bytes
+    except Exception as e:
+        logger.warning(f"Конвертация в JPEG не удалась ({e}), отправляем оригинал")
+        return image_bytes
 
 OCR_PROMPT = """Ты — система OCR для российских кассовых чеков. Твоя задача — распознать ВСЕ данные с фото чека с максимальной точностью.
 
@@ -83,7 +108,9 @@ async def recognize_receipt(image_bytes: bytes) -> dict:
     Возвращает dict с ключами success, store_name, date, items, total.
     При ошибке — {"success": false, "reason": "..."}
     """
-    image_b64 = base64.b64encode(image_bytes).decode("utf-8")
+    # Конвертируем в JPEG — это решает проблему с HEIC от iPhone
+    jpeg_bytes = _to_jpeg(image_bytes)
+    image_b64 = base64.b64encode(jpeg_bytes).decode("utf-8")
 
     try:
         response = await client.chat.completions.create(
@@ -115,7 +142,8 @@ async def recognize_receipt(image_bytes: bytes) -> dict:
         )
 
         raw_text = response.choices[0].message.content
-        logger.debug(f"OCR ответ OpenAI: {raw_text[:200]}...")
+        print(f"[OCR RAW] {raw_text[:500]}")
+        logger.info(f"[OCR RAW] {raw_text[:500]}")
 
         data = _parse_json_response(raw_text)
 

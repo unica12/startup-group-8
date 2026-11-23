@@ -8,6 +8,8 @@ import '../theme/app_theme.dart';
 import '../utils/constants.dart';
 import '../utils/formatting.dart';
 import '../widgets/receipt_card.dart';
+import 'package:image_picker/image_picker.dart';
+
 import 'scan_screen.dart';
 import 'stats_screen.dart';
 import 'history_screen.dart';
@@ -25,17 +27,20 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _currentIndex = 0;
 
+  // Пересоздаёт экран при каждом переключении вкладки — данные всегда свежие
+  Widget _buildCurrentScreen() {
+    switch (_currentIndex) {
+      case 1: return const StatsScreen();
+      case 2: return const HistoryScreen();
+      case 3: return const ProfileScreen();
+      default: return const _HomeTab();
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    const screens = [
-      _HomeTab(),
-      StatsScreen(),
-      HistoryScreen(),
-      ProfileScreen(),
-    ];
-
     return Scaffold(
-      body: IndexedStack(index: _currentIndex, children: screens),
+      body: _buildCurrentScreen(),
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _currentIndex,
         onTap: (i) => setState(() => _currentIndex = i),
@@ -71,12 +76,43 @@ class _HomeTabState extends State<_HomeTab> {
     _loadData();
   }
 
+  // Показывает выбор источника фото, затем открывает ScanScreen и ждёт результата
+  Future<void> _showScanSheet() async {
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('Сделать фото'),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('Выбрать из галереи'),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+
+    if (source != null && mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => ScanScreen(initialSource: source)),
+      );
+    }
+  }
+
   Future<void> _loadData() async {
     final prefs = await SharedPreferences.getInstance();
     _name = prefs.getString(PrefKeys.userName) ?? '';
     _deviceId = prefs.getString(PrefKeys.deviceId) ?? '';
 
     if (_deviceId.isEmpty) {
+      if (!mounted) return;
       setState(() => _loading = false);
       return;
     }
@@ -87,12 +123,15 @@ class _HomeTabState extends State<_HomeTab> {
         api.getStats(_deviceId),
         api.getReceipts(_deviceId, limit: 3),
       ]);
+      if (!mounted) return;
       setState(() {
         _stats = results[0] as Stats;
         _recentReceipts = results[1] as List<Receipt>;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e) {
+      print('[HOME] _loadData error: $e');
+      if (!mounted) return;
       setState(() => _loading = false);
     }
   }
@@ -143,12 +182,12 @@ class _HomeTabState extends State<_HomeTab> {
                     height: 64,
                     child: ElevatedButton.icon(
                       onPressed: () async {
-                        await Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const ScanScreen()),
-                        );
+                        await _showScanSheet();
                         // Обновляем данные после возврата со скана
-                        setState(() => _loading = true);
-                        _loadData();
+                        if (mounted) {
+                          setState(() => _loading = true);
+                          _loadData();
+                        }
                       },
                       icon: const Text('📸', style: TextStyle(fontSize: 22)),
                       label: const Text('Сканировать чек'),

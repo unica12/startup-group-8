@@ -35,11 +35,13 @@ class _ReportScreenState extends State<ReportScreen> {
       final prefs = await SharedPreferences.getInstance();
       final deviceId = prefs.getString(PrefKeys.deviceId) ?? '';
       final report = await ApiService().getReport(deviceId);
+      if (!mounted) return;
       setState(() {
         _report = report;
         _loading = false;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _error = 'Не удалось загрузить отчёт: $e';
         _loading = false;
