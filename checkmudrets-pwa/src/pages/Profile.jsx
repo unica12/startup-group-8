@@ -1,117 +1,137 @@
-import { useState, useEffect } from 'react';
-import { register, getUserName, setUserName as saveUserName, getDeviceId, API_BASE } from '../services/api';
-import { User, Save, Smartphone, Server, Info, Download } from 'lucide-react';
+import { useState } from 'react';
+import { Download, Check, User } from 'lucide-react';
+import { register, setUserName as saveUserName, getDeviceId } from '../services/api';
+import ErrorState from '../components/ErrorState';
+import Logo from '../components/Logo';
+import { Button, Card, Tag, Input } from '../components/ui';
 
-export default function Profile({ userName, setUserName }) {
+function initials(name) {
+  return (
+    name
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((w) => w[0]?.toUpperCase())
+      .join('') || '?'
+  );
+}
+
+export default function Profile({ userName, setUserName, onInstall }) {
   const [name, setName] = useState(userName || '');
   const [saved, setSaved] = useState(false);
-  const [deferredPrompt, setDeferredPrompt] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [installError, setInstallError] = useState(false);
 
-  useEffect(() => {
-    const handler = (e) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-    };
-    window.addEventListener('beforeinstallprompt', handler);
-    return () => window.removeEventListener('beforeinstallprompt', handler);
-  }, []);
-
-  const handleSave = async () => {
-    if (!name.trim()) return;
+  const handleSave = async (e) => {
+    e.preventDefault();
+    if (saving) return;
+    const trimmed = name.trim();
+    if (!trimmed) {
+      setError('Введи имя');
+      return;
+    }
+    setSaved(false);
+    setSaving(true);
+    setError('');
     try {
-      await register(name.trim());
-      setUserName(name.trim());
-      saveUserName(name.trim());
+      await register(trimmed);
+      setUserName(trimmed);
+      saveUserName(trimmed);
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch (err) {
-      console.error('Ошибка сохранения:', err);
+    } catch {
+      setError('Не удалось сохранить. Проверь соединение.');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleInstall = async () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    await deferredPrompt.userChoice;
-    setDeferredPrompt(null);
-  };
+  async function handleInstall() {
+    setInstallError(false);
+    try {
+      await onInstall();
+    } catch {
+      setInstallError(true);
+    }
+  }
 
   return (
-    <div className="px-4 pt-6 pb-4 max-w-lg mx-auto space-y-5">
-      <h1 className="text-2xl font-bold text-primary">Профиль</h1>
+    <div className="px-4 pt-5 pb-6 max-w-lg mx-auto flex flex-col gap-4">
+      <h1 className="text-[28px]">Профиль</h1>
 
-      {/* Name */}
-      <div className="bg-card rounded-2xl border border-border shadow-sm p-5 space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center">
-            <User size={24} className="text-white" />
-          </div>
-          <div>
-            <p className="font-semibold text-text">{userName || 'Пользователь'}</p>
-            <p className="text-xs text-text-secondary">ID: {getDeviceId().slice(0, 12)}...</p>
-          </div>
-        </div>
-
-        <div className="space-y-2">
-          <label className="text-sm font-medium text-text-secondary">Имя</label>
-          <div className="flex gap-2">
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Введи имя"
-              className="flex-1 px-4 py-2.5 rounded-xl border border-border focus:border-accent focus:ring-1 focus:ring-accent outline-none text-sm transition-colors"
-            />
-            <button
-              onClick={handleSave}
-              className={`px-4 py-2.5 rounded-xl font-medium text-sm flex items-center gap-1.5 transition-colors ${
-                saved ? 'bg-accent/10 text-accent' : 'bg-accent text-white hover:bg-accent-dark'
-              }`}
-            >
-              {saved ? 'Сохранено ✓' : <><Save size={16} /> Сохранить</>}
-            </button>
+      <Card>
+        <div className="flex items-center gap-4">
+          <span className="w-14 h-14 rounded-full bg-brand text-white flex items-center justify-center text-xl font-extrabold shrink-0">
+            {userName ? initials(userName) : <User size={24} aria-hidden="true" />}
+          </span>
+          <div className="min-w-0">
+            <p className="font-extrabold text-[17px] truncate">{userName || 'Пользователь'}</p>
+            <p className="text-[12px] text-text-muted truncate">Код устройства {getDeviceId().slice(0, 12)}…</p>
           </div>
         </div>
-      </div>
 
-      {/* Install PWA */}
-      {deferredPrompt && (
+        <form onSubmit={handleSave} className="flex flex-col gap-3 mt-5">
+          <Input
+            label="Имя"
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value);
+              setError('');
+              setSaved(false);
+            }}
+            placeholder="Как к тебе обращаться?"
+            error={error}
+            maxLength={50}
+            readOnly={saving}
+            autoComplete="given-name"
+          />
+          <Button type="submit" full disabled={saving} variant={saved ? 'ghost' : 'primary'}>
+            {saved ? (
+              <>
+                <Check size={18} /> Сохранено
+              </>
+            ) : saving ? (
+              'Сохраняем...'
+            ) : (
+              'Сохранить'
+            )}
+          </Button>
+        </form>
+      </Card>
+
+      {onInstall && (
         <button
+          type="button"
           onClick={handleInstall}
-          className="w-full bg-primary text-white rounded-2xl p-4 flex items-center gap-3 shadow-lg hover:bg-primary-light transition-colors"
+          className="w-full rounded-card bg-text text-white p-5 flex items-center gap-4 text-left transition-transform hover:-translate-y-0.5"
         >
-          <Download size={24} />
-          <div className="text-left">
-            <p className="font-semibold">Установить приложение</p>
-            <p className="text-sm opacity-80">Добавь на рабочий стол для быстрого доступа</p>
-          </div>
+          <span className="w-11 h-11 rounded-[14px] bg-white/15 flex items-center justify-center shrink-0">
+            <Download size={22} />
+          </span>
+          <span>
+            <span className="block font-extrabold">Установить приложение</span>
+            <span className="block text-[13px] text-on-dark leading-snug">Добавь на экран «Домой» для быстрого доступа</span>
+          </span>
         </button>
       )}
+      {installError && <ErrorState message="Не удалось открыть окно установки приложения." />}
 
-      {/* Info */}
-      <div className="bg-card rounded-2xl border border-border shadow-sm p-5 space-y-4">
-        <h3 className="font-semibold flex items-center gap-2">
-          <Info size={18} className="text-accent" /> О приложении
-        </h3>
-
-        <div className="space-y-3 text-sm">
-          <div className="flex items-center gap-3 text-text-secondary">
-            <Smartphone size={16} className="shrink-0" />
-            <span>ЧекМудрец v1.0 — PWA</span>
-          </div>
-          <div className="flex items-center gap-3 text-text-secondary">
-            <Server size={16} className="shrink-0" />
-            <span className="break-all">{API_BASE}</span>
-          </div>
+      <Card>
+        <Tag>О приложении</Tag>
+        <div className="mt-4">
+          <Logo size="sm" />
         </div>
-
-        <div className="pt-3 border-t border-border text-xs text-text-secondary space-y-1">
-          <p>Сканирование чеков: GPT-4o-mini Vision</p>
-          <p>Разработка: ООО «ЧекМудрец»</p>
+        <dl className="mt-4 text-[13px] text-text-soft flex flex-col gap-1.5">
+          <div className="flex justify-between gap-3">
+            <dt>Версия</dt>
+            <dd className="font-bold text-text">1.0 · PWA</dd>
+          </div>
+        </dl>
+        <div className="mt-4 pt-4 border-t border-line text-[12px] text-text-muted leading-relaxed">
           <p>Команда: Земсков А.В., Викторов А.Д., Демидов И.С.</p>
           <p>Группа ЭФБО-06-23, РТУ МИРЭА</p>
         </div>
-      </div>
+      </Card>
     </div>
   );
 }

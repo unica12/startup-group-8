@@ -5,7 +5,8 @@ import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import func, select
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import Item, Receipt, User
@@ -21,19 +22,17 @@ async def get_or_create_user(
     name: Optional[str] = None,
 ) -> User:
     """Получить пользователя по device_id или создать нового."""
-    result = await session.execute(
-        select(User).where(User.device_id == device_id)
+    user = await get_user_by_device_id(session, device_id)
+    if user is not None:
+        return user
+
+    # Главная запрашивает несколько разделов параллельно при первом запуске.
+    await session.execute(
+        insert(User).values(device_id=device_id, name=name)
+        .on_conflict_do_nothing(index_elements=[User.device_id])
     )
-    user = result.scalar_one_or_none()
-
-    if user is None:
-        user = User(device_id=device_id, name=name)
-        session.add(user)
-        await session.flush()
-        await session.refresh(user)
-        logger.info(f"Создан новый пользователь: device_id={device_id}")
-
-    return user
+    result = await session.execute(select(User).where(User.device_id == device_id))
+    return result.scalar_one()
 
 
 async def get_user_by_device_id(
@@ -64,21 +63,19 @@ async def save_receipt(
         date=receipt_date,
         total=total,
         raw_text=raw_text,
+        items=[
+            Item(
+                name=item_data.get("name", ""),
+                quantity=item_data.get("quantity", 1.0),
+                price=item_data.get("price", 0.0),
+                total=item_data.get("total", 0.0),
+                category=item_data.get("category", "Другое"),
+            )
+            for item_data in items_data
+        ],
     )
     session.add(receipt)
     await session.flush()
-
-    # Сохраняем позиции
-    for item_data in items_data:
-        item = Item(
-            receipt_id=receipt.id,
-            name=item_data.get("name", ""),
-            quantity=item_data.get("quantity", 1.0),
-            price=item_data.get("price", 0.0),
-            total=item_data.get("total", 0.0),
-            category=item_data.get("category", "Другое"),
-        )
-        session.add(item)
 
     logger.info(
         f"Сохранён чек id={receipt.id} user_id={user_id} "

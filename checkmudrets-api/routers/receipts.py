@@ -56,8 +56,6 @@ async def upload_receipt(
             detail=f"Неподдерживаемый тип файла: {file.content_type}",
         )
 
-    user = await get_or_create_user(session=session, device_id=device_id)
-
     ocr_result = await recognize_receipt(image_bytes)
 
     if not ocr_result.get("success"):
@@ -67,6 +65,7 @@ async def upload_receipt(
         )
 
     items_data = ocr_result.get("items", [])
+    user = await get_or_create_user(session=session, device_id=device_id)
 
     receipt = await save_receipt(
         session=session,
@@ -80,31 +79,9 @@ async def upload_receipt(
 
     mini_advice = await generate_mini_advice(items_data)
 
-    # ✅ ИСПРАВЛЕНИЕ ЗДЕСЬ
-    items_response = [
-        ItemResponse(
-            id=0,  # временно, чтобы не ломать схему
-            name=item["name"],
-            quantity=item["quantity"],
-            price=item["price"],
-            total=item["total"],
-            category=item["category"],
-        )
-        for item in items_data
-    ]
-
-    receipt_response = ReceiptResponse(
-        id=receipt.id,
-        store_name=receipt.store_name,
-        date=receipt.date,
-        total=receipt.total,
-        items=items_response,
-        created_at=receipt.created_at,
-    )
-
     return UploadReceiptResponse(
         success=True,
-        receipt=receipt_response,
+        receipt=ReceiptResponse.model_validate(receipt),
         mini_advice=mini_advice or None,
     )
 
