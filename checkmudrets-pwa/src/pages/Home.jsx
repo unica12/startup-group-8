@@ -14,7 +14,7 @@ function currentMonth() {
   return { str: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, index: d.getMonth() };
 }
 
-export default function Home({ onNavigate, userName }) {
+export default function Home({ onNavigate, userName, userId }) {
   const [{ str: month, index: monthIndex }] = useState(currentMonth);
   const [data, setData] = useState(null);
   const [attempt, setAttempt] = useState(0);
@@ -38,7 +38,7 @@ export default function Home({ onNavigate, userName }) {
 
   const { stats, receipts, report } = data || {};
   const segments = stats ? toChartSegments(stats.by_category, 4) : [];
-  const lastAdvice = getLastAdvice();
+  const lastAdvice = getLastAdvice(userId);
   const weekSummary = report?.receipts_count > 0
     ? `За неделю потрачено ${formatMoney(report.total_spent)}.${report.change_pct ? ` ${report.change_text}` : ''}`
     : '';

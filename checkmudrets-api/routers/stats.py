@@ -1,33 +1,31 @@
 """Роутер статистики — расходы за месяц."""
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import get_session
-from database.queries import get_monthly_stats, get_or_create_user
+from database.models import User
+from database.queries import get_monthly_stats
 from schemas.models import CategoryStat, LargestPurchase, StatsResponse
+from services.auth import require_consents
 from utils.formatting import get_category_emoji
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
 
 @router.get("", response_model=StatsResponse)
 async def get_stats(
-    device_id: str,
     month: str = "",
+    user: User = Depends(require_consents),
     session: AsyncSession = Depends(get_session),
 ) -> StatsResponse:
     """
     Получить статистику расходов за месяц.
 
     Query-параметры:
-    - device_id: идентификатор устройства
     - month: месяц в формате YYYY-MM (по умолчанию — текущий)
     """
     # Парсим месяц, если передан
@@ -44,7 +42,6 @@ async def get_stats(
         now = datetime.now()
         year, month_num = now.year, now.month
 
-    user = await get_or_create_user(session=session, device_id=device_id)
     stats = await get_monthly_stats(
         session=session, user_id=user.id, year=year, month=month_num
     )

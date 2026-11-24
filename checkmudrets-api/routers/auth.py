@@ -1,35 +1,43 @@
-"""Роутер аутентификации — регистрация по device_id."""
-from __future__ import annotations
+"""Прикладной профиль и согласия после входа через Supabase."""
+from ipaddress import ip_address
 
-import logging
-
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import get_session
-from database.queries import get_or_create_user
-from schemas.models import RegisterRequest, UserResponse
-
-logger = logging.getLogger(__name__)
+from database.models import User
+from database.queries import save_consents
+from schemas.models import ConsentRequest, UserResponse
+from services.auth import Identity, REQUIRED_CONSENTS, current_user, has_required_consents, verify_access_token
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
-@router.post("/register", response_model=UserResponse)
-async def register(
-    body: RegisterRequest,
+@router.get("/me", response_model=UserResponse)
+async def me(
+    user: User = Depends(current_user), identity: Identity = Depends(verify_access_token),
     session: AsyncSession = Depends(get_session),
 ) -> UserResponse:
-    """
-    Регистрация или вход по device_id.
+    complete = await has_required_consents(session, user.id)
+    await session.commit()
+    return UserResponse(id=user.id, name=user.name, email=identity.email,
+                        created_at=user.created_at, consents_complete=complete)
 
-    Если пользователь с таким device_id уже существует — возвращаем его.
-    Иначе создаём нового.
-    """
-    user = await get_or_create_user(
-        session=session,
-        device_id=body.device_id,
-        name=body.name,
-    )
-    logger.info(f"Авторизация: device_id={body.device_id} user_id={user.id}")
-    return UserResponse.model_validate(user)
+
+@router.post("/consents", response_model=UserResponse)
+async def accept_consents(
+    body: ConsentRequest, request: Request, user: User = Depends(current_user),
+    identity: Identity = Depends(verify_access_token), session: AsyncSession = Depends(get_session),
+) -> UserResponse:
+    if body.consents != REQUIRED_CONSENTS:
+        raise HTTPException(422, "Нужно принять все обязательные документы актуальных версий.")
+
+    try:
+        client_ip = str(ip_address(request.client.host)) if request.client else None
+    except ValueError:
+        client_ip = None
+    agent = request.headers.get("user-agent", "")[:512] or None
+    await save_consents(session, user.id, body.consents, client_ip, agent)
+    await session.commit()
+    return UserResponse(id=user.id, name=user.name, email=identity.email,
+                        created_at=user.created_at, consents_complete=True)

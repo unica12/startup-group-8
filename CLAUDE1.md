@@ -7,6 +7,8 @@
 
 Пользователь фотографирует чек → GPT-4o-mini Vision распознаёт товары → траты раскладываются по категориям → приложение показывает статистику и советы по экономии.
 
+Согласованная архитектура — React 19/Vite/Tailwind CSS v4, FastAPI с асинхронным SQLAlchemy, PostgreSQL и Auth в Supabase (`checkmudrets`, Stockholm, eu-north-1). План размещения — FastAPI на Render, PWA на GitHub Pages рядом с лендингом.
+
 ---
 
 ## Правила работы
@@ -27,7 +29,7 @@
 ```
 startup-group-8/            (ветка main)
 ├── checkmudrets-pwa/       # Frontend — React 19 + Vite + Tailwind CSS v4 + vite-plugin-pwa
-├── checkmudrets-api/       # Backend — FastAPI + async SQLAlchemy + aiosqlite (SQLite)
+├── checkmudrets-api/       # FastAPI + async SQLAlchemy + asyncpg, SQLite для тестов
 ├── checkmudrets-app/       # ЛЕГАСИ (Flutter), не трогать
 └── CLAUDE1.md
 ```
@@ -35,7 +37,8 @@ startup-group-8/            (ветка main)
 ### Frontend (`checkmudrets-pwa/`)
 - Навигация без react-router: состояние `page` в `src/App.jsx` + `src/components/BottomNav.jsx` (5 вкладок: Главная, История, Скан, Статистика, Профиль; «Скан» — поднятая круглая кнопка).
 - Страницы: `src/pages/{Home,History,Scan,Stats,Profile}.jsx`. Компоненты: `Loader`, `EmptyState`.
-- API-клиент: `src/services/api.js`. Сейчас пользователь = `device_id` (`web_<uuid>` в localStorage), передаётся в query/form каждого запроса. `API_BASE` из `VITE_API_URL`.
+- `src/auth/` закрывает основные экраны до восстановления сессии и фиксации согласий. Supabase SDK хранит и обновляет сессию.
+- `src/services/supabase.js` использует `VITE_SUPABASE_URL` и `VITE_SUPABASE_PUBLISHABLE_KEY`. `src/services/api.js` передаёт Bearer-токен на `VITE_API_URL`. Service worker кэширует файлы приложения, защищённые ответы загружаются с сервера.
 - Шрифт Manrope и токены палитры лендинга — в `src/index.css` через `@theme` (Tailwind v4).
 - Иконки интерфейса — `lucide-react`. PWA-иконки с маскотом — `public/icons/`.
 - `vercel.json` — остаток от старого плана, можно удалить.
@@ -45,19 +48,23 @@ startup-group-8/            (ветка main)
 - `services/ocr.py` — промпт для GPT Vision, возвращает магазин, дату, позиции с категориями.
 - `services/advisor.py` — советы по экономии + мини-совет после скана.
 - `services/reporter.py` — недельный отчёт с изменением к прошлой неделе.
-- `database/models.py` — User(id, device_id unique, name, created_at), Receipt(id, user_id, store_name, date, total, raw_text, created_at), Item(id, receipt_id, name, quantity, price, total, category).
-- `utils/config.py` — env: `OPENAI_API_KEY`, `OPENAI_MODEL` (gpt-4o-mini), `DATABASE_URL`, `HOST`, `PORT`.
+- `database/models.py` — User(id, auth_user_id UUID unique, name, created_at), Receipt, Item, Consent. Внешние ключи чеков и позиций используют прежние целочисленные ID.
+- `database/db.py` подключается к PostgreSQL с проверкой сертификата и имени хоста. На старте создаёт таблицы, добавляет недостающий UUID в существующую `users`, включает RLS и отзывает права Data API для прикладных таблиц и их последовательностей. Старые строки остаются в базе без привязки к новым сессиям. SQLite используется для изолированных тестов.
+- `services/auth.py` проверяет JWT по JWKS Supabase, включая подпись, issuer, audience, срок действия и `sub`. API привязывает данные к проверенному UUID.
+- `utils/config.py` читает `OPENAI_API_KEY`, `OPENAI_MODEL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_DB_CA_FILE`, `HOST`, `PORT`. У Session pooler URL проекта определяется из имени пользователя БД, если `SUPABASE_URL` опущен. `SUPABASE_JWT_SECRET` используется только при явной поддержке legacy HS256 на сервере. Для `checkmudrets` JWKS публикует ES256.
 - Swagger: `http://localhost:8000/docs` — источник правды по контракту, если этот файл с ним расходится.
 
 ---
 
 ## API-контракт (текущий, сверен с `schemas/models.py`)
 
-Все эндпоинты сейчас идентифицируют пользователя по `device_id`.
+Для `/auth/me`, `/auth/consents`, `/receipts`, `/stats`, `/advice` и `/report` нужен `Authorization: Bearer <access_token>` из Supabase Auth. При отсутствующем, неверном или просроченном токене API возвращает `401`. Для операций с расходами без обязательных согласий API возвращает `403` с кодом `consents_required`.
 
-**POST /auth/register** — JSON `{ device_id, name? }` → `{ id, device_id, name, created_at }`. Это get-or-create, не настоящая регистрация.
+**GET /auth/me** — идемпотентно создаёт прикладной профиль и возвращает `{ id, name, email, created_at, consents_complete }`. Вход и регистрация выполняются через Supabase Auth.
 
-**POST /receipts** — multipart: `file` (изображение), `device_id` →
+**POST /auth/consents** — принимает `{ "consents": { "terms": "prototype-1", "personal_data": "prototype-1", "cross_border": "prototype-1" } }` и возвращает профиль. Сохраняет тип, версию, дату принятия, IP и User-Agent. Повторная отправка той же версии не дублирует согласия. Неполный или устаревший набор даёт `422`.
+
+**POST /receipts** — multipart с единственным полем `file` (изображение) →
 ```json
 {
   "success": true,
@@ -72,9 +79,9 @@ startup-group-8/            (ветка main)
 ```
 `mini_advice` может быть пустой строкой/null. При неудачном OCR — `success: false` + `error`.
 
-**GET /receipts?device_id=&limit=10** → `{ receipts: Receipt[], total_count }`. `total_count` — число чеков в ответе с учётом `limit`.
+**GET /receipts?limit=10** → `{ receipts: Receipt[], total_count }`. `total_count` — число чеков в ответе с учётом `limit` от 1 до 100.
 
-**GET /stats?device_id=&month=YYYY-MM** →
+**GET /stats?month=YYYY-MM** →
 ```json
 {
   "month": "2026-11", "total_spent": 18420.0, "receipts_count": 15, "average_receipt": 1228.0,
@@ -83,9 +90,9 @@ startup-group-8/            (ветка main)
 }
 ```
 
-**GET /advice?device_id=** → `{ advice: string, generated_at }` (текст с эмодзи, несколько строк)
+**GET /advice** → `{ advice: string, generated_at }` (текст с эмодзи, несколько строк)
 
-**GET /report?device_id=** → `{ period: {start, end, label}, total_spent, receipts_count, change_pct, change_text, top_categories: [{category, amount, emoji}], summary_text }`
+**GET /report** → `{ period: {start, end, label}, total_spent, receipts_count, change_pct, change_text, top_categories: [{category, amount, emoji}], summary_text }`
 
 Категории OCR: Продукты, Молочные, Мясо, Овощи/Фрукты, Хлеб, Напитки, Алкоголь, Кофе, Сладости, Снеки, Готовая еда, Бытовая химия, Гигиена, Косметика, Одежда, Электроника, Лекарства, Транспорт, Топливо, Другое. Эмодзи — `utils/formatting.py::CATEGORY_EMOJI`.
 
@@ -165,15 +172,13 @@ startup-group-8/            (ветка main)
 - [x] Новые PWA-иконки 192/512 (+ maskable) из маскота на зелёном фоне; `theme_color`/`background_color` в `vite.config.js` → `#2E7D32` / `#F7FAF5`.
 
 ### Этап 2 — Регистрация
-Зависит от решения по хостингу (Этап 4) — **уточни у пользователя перед началом.** Варианты:
-- **A (рекомендуется, если БД в Supabase):** Supabase Auth (email + пароль) через `@supabase/supabase-js` на фронте; FastAPI проверяет Supabase JWT (`Authorization: Bearer`) и берёт `user_id` из токена.
-- **B:** своя авторизация в FastAPI: `POST /auth/register` (email, пароль, имя, согласия), `POST /auth/login`, `GET /auth/me`; пароли — bcrypt (passlib), токен — JWT (python-jose/pyjwt).
-
-В обоих случаях:
-- [ ] Экраны «Регистрация» и «Вход» в стиле лендинга (форма как `.form-card`), валидация, понятные ошибки на русском.
-- [ ] На регистрации — **отдельные** чекбоксы согласий (см. Этап 5), без них кнопка неактивна.
-- [ ] Неавторизованный пользователь видит только онбординг/вход; токен в localStorage, автологин, выход.
-- [ ] Все эндпоинты бэкенда берут пользователя из токена, а не из `device_id`. `device_id` убрать из API.
+- [x] Экраны «Регистрация» и «Вход» в дизайн-системе лендинга. Имя, email, повтор и показ пароля, валидация и ошибки на русском.
+- [x] Три отдельных обязательных чекбокса и просмотр предварительных документов. Согласия фиксируются после проверки сессии, включая вход после подтверждения email с другого устройства.
+- [x] Supabase Auth с восстановлением и обновлением сессии, подтверждением email и выходом. Закрытые экраны и нижняя навигация доступны после подтверждения согласий.
+- [x] FastAPI проверяет Bearer JWT с кешированием и обновлением JWKS. Добавлены идемпотентный профиль по UUID и `GET /auth/me`. Идентификация по `device_id` удалена из API и PWA.
+- [x] Подключение к Supabase PostgreSQL через Session pooler с проверкой TLS, сохранение связей чеков и позиций, идемпотентная инициализация, RLS и ограничение прав Data API. Сохранены автотесты на SQLite.
+- [x] Изоляция двух аккаунтов, сохранение чеков и согласий, JWT, вход, сессия и верстка 375 px проверены на локальном Supabase с PostgreSQL и почтовой песочницей. Подключение и права таблиц проверены также в облачном проекте.
+- [ ] Финальная проверка доставки писем подтверждения в облачном проекте на адрес участника команды.
 
 ### Этап 3 — Профиль
 - [ ] Аватар с инициалами, имя, email, «С нами с <дата>».
@@ -182,20 +187,17 @@ startup-group-8/            (ветка main)
 - [ ] Ссылки: Политика конфиденциальности, Пользовательское соглашение, О проекте (команда, курс).
 - [ ] «Скачать мои данные» (JSON-экспорт) и «Удалить аккаунт» (с подтверждением, каскадно удаляет чеки и позиции).
 - [ ] Кнопка установки PWA (`beforeinstallprompt`, уже есть) + подсказка для iOS («Поделиться → На экран Домой»).
-- [ ] Выход.
+- [x] Выход реализован в Этапе 2.
 
 ### Этап 4 — Деплой
-**Важно: Supabase не умеет запускать FastAPI/Python.** Edge Functions у Supabase — только TypeScript/Deno. Поэтому «бэкенд на Supabase» = одно из:
-- **A (рекомендуется, меньше всего переписывать):** Supabase = PostgreSQL (+ Auth). FastAPI хостится отдельно на зарубежном хостинге (Render / Railway / Fly.io), подключается к Supabase Postgres.
-  - `DATABASE_URL=postgresql+asyncpg://...` (Supabase → Connect → Session pooler, порт 5432), `asyncpg` вместо `aiosqlite` в `requirements.txt`.
-  - Таблицы создавать через `Base.metadata.create_all` на старте или SQL в Supabase.
-  - CORS: `allow_origins=["https://unica12.github.io", "http://localhost:5173"]`.
-- **B:** переписать бэкенд на Supabase Edge Functions (TS) + прямой доступ к БД с фронта через supabase-js и RLS. Чище, но это полный рерайт — не успеть за пару дней.
+FastAPI будет размещён на Render и подключён к уже подготовленному PostgreSQL через Session pooler (порт 5432) с проверкой TLS. PWA будет размещена на GitHub Pages и будет обращаться к Supabase Auth и FastAPI.
+- [ ] Настроить переменные окружения Render, включая путь к CA, и проверить запуск приложения.
+- [ ] Ограничить CORS адресами опубликованной PWA и локальной разработки.
 
 Риски, о которых надо помнить:
 - Free-tier Supabase засыпает после недели без активности → нужен keep-alive (GitHub Actions cron раз в несколько дней пингует БД/эндпоинт).
 - Free-tier Render засыпает → первый запрос ~30–50 сек. Перед защитой «разбудить».
-- Из РФ Supabase бывает медленным/нестабильным без VPN — проверить с телефона без VPN до защиты. Если фронт ходит только в FastAPI (вариант A без supabase-js), эта проблема касается только сервера, не пользователя.
+- Проверить доступность Supabase Auth, FastAPI и распознавания на устройстве, которое будет использоваться на защите.
 
 **Фронт → GitHub Pages.** Сейчас Pages этого репо уже отдаёт лендинг из ветки `week14` (`/docs`) по адресу `/startup-group-8/`. PWA кладём рядом, не ломая лендинг:
 - [ ] PWA по адресу `https://unica12.github.io/startup-group-8/app/`.
@@ -209,7 +211,7 @@ startup-group-8/            (ветка main)
 - [ ] **Политика обработки ПД** (страница в приложении + ссылка в футере/профиле): оператор, перечень ПД (имя, email, фото чеков и их содержимое, данные об устройстве), цели, правовое основание (согласие), сроки хранения, способы обработки, третьи лица и трансграничная передача (OpenAI — США, Supabase/хостинг — где фактически расположены серверы), права субъекта (доступ, исправление, удаление, отзыв согласия), контакты для обращений.
 - [ ] **Пользовательское соглашение.**
 - [ ] **Согласие на обработку ПД — отдельным документом и отдельным чекбоксом** (с 01.09.2025 согласие нельзя прятать внутрь политики/соглашения). Отдельный чекбокс — согласие на трансграничную передачу (OpenAI).
-- [ ] Таблица `consents` в БД: `user_id, consent_type, document_version, accepted_at, ip/user_agent` — фиксируем факт и версию согласия.
+- [x] Таблица `consents` и фиксация принятия предварительных документов реализованы в Этапе 2.
 - [ ] Отзыв согласия = удаление аккаунта и всех данных (из Этапа 3); экспорт данных.
 - [ ] Фото чеков не хранить после распознавания (сейчас хранится только `raw_text` — проверить и указать в политике).
 - [ ] Если в PWA будет аналитика (Яндекс.Метрика, как на лендинге) — cookie-баннер и упоминание в политике.
@@ -218,13 +220,22 @@ startup-group-8/            (ветка main)
 ---
 
 ## Текущее состояние
-- ✅ Backend написан, работает локально (SQLite).
+- ✅ Backend подключён к Supabase PostgreSQL. SQLite используется в автоматизированных тестах.
 - ✅ PWA: редизайн 5 экранов завершён, `npm run build` и `npm run lint` проходят. Навигация, загрузка, ошибки, пустые состояния и офлайн-запуск оболочки проверены в Chromium на 375 px.
+- ✅ Вход, регистрация и согласия реализованы и проверены в Chromium с локальными Supabase Auth, Mailpit и PostgreSQL. Для OCR и советов в этой проверке подставлялись ответы OpenAI. Реальное распознавание было проверено командой на Этапе 1.
 - ✅ Лендинг задеплоен на GitHub Pages (ветка `week14`).
-- ⏳ Регистрация, управление аккаунтом, деплой PWA и API, 152-ФЗ — следующие этапы.
+- ⏳ Управление аккаунтом, деплой PWA и API, окончательные документы — следующие этапы.
+
+## Настройки Supabase Dashboard
+
+1. В проекте `checkmudrets` открой **Connect** и скопируй Project URL. Добавь его в `checkmudrets-pwa/.env` как `VITE_SUPABASE_URL`. В **Project Settings → API Keys → Publishable key** возьми `sb_publishable_…` для `VITE_SUPABASE_PUBLISHABLE_KEY`. [API keys](https://supabase.com/docs/guides/getting-started/api-keys)
+2. В **Connect → Session pooler** скопируй строку подключения с портом `5432` в `checkmudrets-api/.env` как `DATABASE_URL`. Замени весь плейсхолдер пароля вместе со скобками. Специальные символы пароля в URI должны быть URL-кодированы. В **Database → Settings → SSL Configuration → Download certificate** скачай сертификат и укажи локальный путь в `SUPABASE_DB_CA_FILE`. [Postgres и SSL](https://supabase.com/docs/guides/database/connecting-to-postgres)
+3. В **Authentication → Sign In / Providers** оставь включённым Allow new users to sign up. В разделе **Email** включи Email и Confirm Email. В **Authentication → URL Configuration** установи Site URL `http://localhost:5173/` для локальной демонстрации и добавь этот же точный адрес в Redirect URLs. Если открываешь PWA по `http://127.0.0.1:5173/`, добавь и этот адрес. Адрес GitHub Pages добавляется на Этапе 4. [Настройки Auth](https://supabase.com/docs/guides/auth/general-configuration)
+4. Для проверки письма в облачном проекте используй адрес участника команды проекта. Для демонстрации регистрации на сторонние адреса настрой **Authentication → SMTP Settings**. Встроенная отправка ограничена адресами участников команды. [Настройка SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
+5. Если проект используется только ЧекМудрецом, можно отключить весь Data API через **Integrations → Data API → Enable Data API**. Прикладные таблицы уже закрыты правами и RLS при запуске FastAPI. [Доступ к таблицам](https://supabase.com/docs/guides/api/securing-your-api)
 
 ## Команды
-Выполни команды в двух терминалах из корня репозитория. Для фронтенда нужен Node.js 20.19+ (ветка 20) или 22.12+.
+Выполни команды в двух терминалах из корня репозитория. Для фронтенда нужен Node.js 22.12+.
 
 ```bash
 # Backend (Python 3.13)
@@ -232,7 +243,7 @@ cd checkmudrets-api
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 test -f .env || cp .env.example .env
-# Заполни OPENAI_API_KEY в .env, затем запусти API.
+# Заполни OPENAI_API_KEY, DATABASE_URL и путь к CA в .env.
 .venv/bin/python -m uvicorn main:app --reload   # http://localhost:8000/docs
 ```
 
@@ -240,8 +251,19 @@ test -f .env || cp .env.example .env
 # Frontend
 cd checkmudrets-pwa
 npm ci
-VITE_API_URL=http://localhost:8000 npm run dev   # http://localhost:5173
+test -f .env || cp .env.example .env
+# Заполни URL и publishable key Supabase в .env.
+VITE_API_URL=http://localhost:8000 npm run dev -- --strictPort   # http://localhost:5173
 npm run build
+npm run lint
+```
+
+Автотесты FastAPI создают временную SQLite и локальный JWKS. Они проверяют проверку JWT, ротацию ключей, отсутствие дубликатов, согласия и изоляцию чеков, статистики, советов и отчётов.
+
+```bash
+cd checkmudrets-api
+uv pip install --python .venv/bin/python -r requirements-test.txt
+.venv/bin/python -m unittest discover -s tests -v
 ```
 
 Vite слушает локальную сеть. Для проверки с телефона укажи адрес API, доступный с телефона. Для проверки камеры и установки PWA используй HTTPS или localhost.

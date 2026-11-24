@@ -4,23 +4,21 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
 
-class RegisterRequest(BaseModel):
-    device_id: str = Field(..., description="Уникальный идентификатор устройства")
-    name: Optional[str] = Field(None, description="Имя пользователя")
-
-
 class UserResponse(BaseModel):
-    user_id: int = Field(alias="id")
-    device_id: str
+    id: int
     name: Optional[str]
+    email: Optional[str]
     created_at: datetime
+    consents_complete: bool
 
-    model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+class ConsentRequest(BaseModel):
+    consents: dict[str, str] = Field(min_length=1, max_length=10)
 
 
 # ─── Items / Receipts ─────────────────────────────────────────────────────────

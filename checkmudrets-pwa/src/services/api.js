@@ -1,80 +1,80 @@
-const API_BASE = import.meta.env.VITE_API_URL || 'https://checkmudrets-api.onrender.com';
+import { supabase } from './supabase';
 
-function getDeviceId() {
-  let id = localStorage.getItem('checkmudrets_device_id');
-  if (!id) {
-    const randomId = crypto.randomUUID?.() ?? Array.from(
-      crypto.getRandomValues(new Uint8Array(16)),
-      (byte) => byte.toString(16).padStart(2, '0'),
-    ).join('');
-    id = `web_${randomId}`;
-    localStorage.setItem('checkmudrets_device_id', id);
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+const adviceKey = (userId) => `checkmudrets:last-advice:${userId}`;
+
+export function getLastAdvice(userId) {
+  return localStorage.getItem(adviceKey(userId)) || '';
+}
+
+async function getSession(expectedUser) {
+  const { data, error } = await supabase.auth.getSession();
+  if (error) throw error;
+  if (!data.session || (expectedUser && data.session.user.id !== expectedUser)) {
+    throw new Error('Сессия изменилась. Войди снова.');
   }
-  return id;
+  return data.session;
 }
 
-function getUserName() {
-  return localStorage.getItem('checkmudrets_user_name') || '';
-}
-
-function setUserName(name) {
-  localStorage.setItem('checkmudrets_user_name', name);
-}
-
-const LAST_ADVICE_KEY = 'checkmudrets_last_advice';
-
-/** Последний mini_advice после скана — показываем на главной */
-function getLastAdvice() {
-  return localStorage.getItem(LAST_ADVICE_KEY) || '';
-}
-
-function setLastAdvice(text) {
-  if (text) localStorage.setItem(LAST_ADVICE_KEY, text);
-}
-
-async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, options);
-  if (!res.ok) {
-    const error = new Error(`Ошибка сервера (${res.status})`);
-    error.status = res.status;
+async function request(path, options = {}, session) {
+  const current = session ?? await getSession();
+  const headers = new Headers(options.headers);
+  headers.set('Authorization', `Bearer ${current.access_token}`);
+  const response = await fetch(`${API_BASE}${path}`, { ...options, headers, cache: 'no-store' });
+  if (!response.ok) {
+    if (response.status === 401) {
+      const { data } = await supabase.auth.getSession();
+      if (data.session?.access_token === current.access_token) {
+        await supabase.auth.signOut({ scope: 'local' });
+      }
+    }
+    const error = new Error(`Ошибка сервера (${response.status})`);
+    error.status = response.status;
     throw error;
   }
-  return res.json();
+  return response.json();
 }
 
-export async function register(name) {
-  const deviceId = getDeviceId();
-  return request('/auth/register', {
+export async function getMe(userId, signal) {
+  return request('/auth/me', { signal }, await getSession(userId));
+}
+
+export async function recordConsents(userId, consents, signal) {
+  return request('/auth/consents', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ device_id: deviceId, name }),
-  });
+    body: JSON.stringify({ consents }),
+    signal,
+  }, await getSession(userId));
 }
 
 export async function uploadReceipt(file) {
+  const session = await getSession();
   const form = new FormData();
   form.append('file', file);
-  form.append('device_id', getDeviceId());
-  const res = await request('/receipts', { method: 'POST', body: form });
-  if (res?.success && res.mini_advice) setLastAdvice(res.mini_advice);
-  return res;
+  const result = await request('/receipts', { method: 'POST', body: form }, session);
+  if (result.success && result.mini_advice) {
+    try {
+      localStorage.setItem(adviceKey(session.user.id), result.mini_advice);
+    } catch {
+      // Чек уже сохранён на сервере, даже если кеш браузера недоступен.
+    }
+  }
+  return result;
 }
 
-export async function getReceipts(limit = 20, signal) {
-  return request(`/receipts?device_id=${getDeviceId()}&limit=${limit}`, { signal });
+export function getReceipts(limit = 20, signal) {
+  return request(`/receipts?limit=${limit}`, { signal });
 }
 
-export async function getStats(month = '', signal) {
-  const q = month ? `&month=${month}` : '';
-  return request(`/stats?device_id=${getDeviceId()}${q}`, { signal });
+export function getStats(month = '', signal) {
+  return request(month ? `/stats?month=${encodeURIComponent(month)}` : '/stats', { signal });
 }
 
-export async function getAdvice() {
-  return request(`/advice?device_id=${getDeviceId()}`);
+export function getAdvice() {
+  return request('/advice');
 }
 
-export async function getReport(signal) {
-  return request(`/report?device_id=${getDeviceId()}`, { signal });
+export function getReport(signal) {
+  return request('/report', { signal });
 }
-
-export { getDeviceId, getUserName, setUserName, getLastAdvice, API_BASE };

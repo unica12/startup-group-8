@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 from database.db import close_db, init_db
@@ -18,11 +19,24 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    validate_config()
+    try:
+        await init_db()
+        logger.info("ЧекМудрец API запущен")
+        yield
+    finally:
+        await close_db()
+        logger.info("ЧекМудрец API остановлен")
+
 # Инициализация приложения
 app = FastAPI(
     title="ЧекМудрец API",
     description="REST API для мобильного приложения ЧекМудрец — сканирование чеков и анализ расходов",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 # CORS — открываем для всех origins (MVP)
@@ -33,27 +47,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def disable_response_caching(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
 # Подключение роутеров
 app.include_router(auth.router)
 app.include_router(receipts.router)
 app.include_router(stats.router)
 app.include_router(advice.router)
 app.include_router(report.router)
-
-
-@app.on_event("startup")
-async def on_startup() -> None:
-    """При запуске: проверить конфиг и инициализировать БД."""
-    validate_config()
-    await init_db()
-    logger.info("ЧекМудрец API запущен")
-
-
-@app.on_event("shutdown")
-async def on_shutdown() -> None:
-    """При остановке: закрыть соединения с БД."""
-    await close_db()
-    logger.info("ЧекМудрец API остановлен")
 
 
 @app.get("/", tags=["health"])

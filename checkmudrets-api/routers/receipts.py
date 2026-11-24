@@ -1,23 +1,20 @@
 """Роутер чеков — загрузка фото и история."""
 from __future__ import annotations
 
-import logging
-
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import get_session
-from database.queries import get_last_receipts, get_or_create_user, save_receipt
+from database.models import User
+from database.queries import get_last_receipts, save_receipt
 from schemas.models import (
-    ItemResponse,
     ReceiptResponse,
     ReceiptsListResponse,
     UploadReceiptResponse,
 )
 from services.advisor import generate_mini_advice
+from services.auth import require_consents
 from services.ocr import recognize_receipt
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/receipts", tags=["receipts"])
 
@@ -35,15 +32,9 @@ ALLOWED_CONTENT_TYPES = {
 @router.post("", response_model=UploadReceiptResponse)
 async def upload_receipt(
     file: UploadFile = File(...),
-    device_id: str = Form(...),
+    user: User = Depends(require_consents),
     session: AsyncSession = Depends(get_session),
 ) -> UploadReceiptResponse:
-
-    logger.info(
-        f"Загрузка чека | device_id={device_id!r} "
-        f"filename={file.filename!r} "
-        f"content_type={file.content_type!r}"
-    )
 
     image_bytes = await file.read()
 
@@ -56,6 +47,7 @@ async def upload_receipt(
             detail=f"Неподдерживаемый тип файла: {file.content_type}",
         )
 
+    await session.commit()
     ocr_result = await recognize_receipt(image_bytes)
 
     if not ocr_result.get("success"):
@@ -65,7 +57,6 @@ async def upload_receipt(
         )
 
     items_data = ocr_result.get("items", [])
-    user = await get_or_create_user(session=session, device_id=device_id)
 
     receipt = await save_receipt(
         session=session,
@@ -76,6 +67,7 @@ async def upload_receipt(
         items_data=items_data,
         raw_text="",
     )
+    await session.commit()
 
     mini_advice = await generate_mini_advice(items_data)
 
@@ -88,37 +80,14 @@ async def upload_receipt(
 
 @router.get("", response_model=ReceiptsListResponse)
 async def get_receipts(
-    device_id: str,
-    limit: int = 10,
+    limit: int = Query(default=10, ge=1, le=100),
+    user: User = Depends(require_consents),
     session: AsyncSession = Depends(get_session),
 ) -> ReceiptsListResponse:
 
-    user = await get_or_create_user(session=session, device_id=device_id)
     receipts = await get_last_receipts(session=session, user_id=user.id, limit=limit)
 
-    receipts_response = [
-        ReceiptResponse(
-            id=r.id,
-            store_name=r.store_name,
-            date=r.date,
-            total=r.total,
-            items=[
-                ItemResponse(
-                    id=item.id,
-                    name=item.name,
-                    quantity=item.quantity,
-                    price=item.price,
-                    total=item.total,
-                    category=item.category,
-                )
-                for item in r.items
-            ],
-            created_at=r.created_at,
-        )
-        for r in receipts
-    ]
-
     return ReceiptsListResponse(
-        receipts=receipts_response,
-        total_count=len(receipts_response),
+        receipts=[ReceiptResponse.model_validate(receipt) for receipt in receipts],
+        total_count=len(receipts),
     )

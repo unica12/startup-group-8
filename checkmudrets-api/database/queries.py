@@ -4,45 +4,60 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 from typing import Optional
+from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.dialects.sqlite import insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from database.models import Item, Receipt, User
+from database.models import Consent, Item, Receipt, User
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Операции с пользователями ───────────────────────────────────────────────
 
+def conflict_insert(session: AsyncSession, model):
+    insert = pg_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    return insert(model)
+
+
 async def get_or_create_user(
     session: AsyncSession,
-    device_id: str,
+    auth_user_id: UUID,
     name: Optional[str] = None,
 ) -> User:
-    """Получить пользователя по device_id или создать нового."""
-    user = await get_user_by_device_id(session, device_id)
+    query = select(User).where(User.auth_user_id == auth_user_id)
+    user = await session.scalar(query)
     if user is not None:
         return user
 
-    # Главная запрашивает несколько разделов параллельно при первом запуске.
     await session.execute(
-        insert(User).values(device_id=device_id, name=name)
-        .on_conflict_do_nothing(index_elements=[User.device_id])
+        conflict_insert(session, User).values(auth_user_id=auth_user_id, name=name)
+        .on_conflict_do_nothing(index_elements=[User.auth_user_id])
     )
-    result = await session.execute(select(User).where(User.device_id == device_id))
+    result = await session.execute(query)
     return result.scalar_one()
 
 
-async def get_user_by_device_id(
-    session: AsyncSession, device_id: str
-) -> Optional[User]:
-    """Получить пользователя по device_id."""
+async def get_user_consents(session: AsyncSession, user_id: int) -> set[tuple[str, str]]:
     result = await session.execute(
-        select(User).where(User.device_id == device_id)
+        select(Consent.consent_type, Consent.document_version).where(Consent.user_id == user_id)
     )
-    return result.scalar_one_or_none()
+    return {(kind, version) for kind, version in result}
+
+
+async def save_consents(
+    session: AsyncSession, user_id: int, accepted: dict[str, str], ip_address: str | None, user_agent: str | None,
+) -> None:
+    await session.execute(
+        conflict_insert(session, Consent).values([
+            dict(user_id=user_id, consent_type=kind, document_version=version,
+                 ip_address=ip_address, user_agent=user_agent)
+            for kind, version in accepted.items()
+        ]).on_conflict_do_nothing(index_elements=[Consent.user_id, Consent.consent_type, Consent.document_version])
+    )
 
 
 # ─── Операции с чеками ────────────────────────────────────────────────────────

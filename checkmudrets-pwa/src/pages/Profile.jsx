@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { Download, Check, User } from 'lucide-react';
-import { register, setUserName as saveUserName, getDeviceId } from '../services/api';
+import { Download, LogOut, User } from 'lucide-react';
+import { useAuth } from '../auth/context';
 import ErrorState from '../components/ErrorState';
 import Logo from '../components/Logo';
-import { Button, Card, Tag, Input } from '../components/ui';
+import { Button, Card, Tag } from '../components/ui';
 
 function initials(name) {
   return (
@@ -16,35 +16,23 @@ function initials(name) {
   );
 }
 
-export default function Profile({ userName, setUserName, onInstall }) {
-  const [name, setName] = useState(userName || '');
-  const [saved, setSaved] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
+export default function Profile({ profile, onInstall }) {
+  const { signOut } = useAuth();
+  const [leaving, setLeaving] = useState(false);
+  const [logoutError, setLogoutError] = useState(false);
   const [installError, setInstallError] = useState(false);
 
-  const handleSave = async (e) => {
-    e.preventDefault();
-    if (saving) return;
-    const trimmed = name.trim();
-    if (!trimmed) {
-      setError('Введи имя');
-      return;
-    }
-    setSaved(false);
-    setSaving(true);
-    setError('');
+  async function handleSignOut() {
+    setLeaving(true);
+    setLogoutError(false);
     try {
-      await register(trimmed);
-      setUserName(trimmed);
-      saveUserName(trimmed);
-      setSaved(true);
+      await signOut();
     } catch {
-      setError('Не удалось сохранить. Проверь соединение.');
+      setLogoutError(true);
     } finally {
-      setSaving(false);
+      setLeaving(false);
     }
-  };
+  }
 
   async function handleInstall() {
     setInstallError(false);
@@ -62,41 +50,20 @@ export default function Profile({ userName, setUserName, onInstall }) {
       <Card>
         <div className="flex items-center gap-4">
           <span className="w-14 h-14 rounded-full bg-brand text-white flex items-center justify-center text-xl font-extrabold shrink-0">
-            {userName ? initials(userName) : <User size={24} aria-hidden="true" />}
+            {profile.name ? initials(profile.name) : <User size={24} aria-hidden="true" />}
           </span>
           <div className="min-w-0">
-            <p className="font-extrabold text-[17px] truncate">{userName || 'Пользователь'}</p>
-            <p className="text-[12px] text-text-muted truncate">Код устройства {getDeviceId().slice(0, 12)}…</p>
+            <p className="font-extrabold text-[17px] wrap-anywhere">{profile.name || 'Пользователь'}</p>
+            {profile.email && <p className="text-xs text-text-muted wrap-anywhere">{profile.email}</p>}
           </div>
         </div>
 
-        <form onSubmit={handleSave} className="flex flex-col gap-3 mt-5">
-          <Input
-            label="Имя"
-            value={name}
-            onChange={(e) => {
-              setName(e.target.value);
-              setError('');
-              setSaved(false);
-            }}
-            placeholder="Как к тебе обращаться?"
-            error={error}
-            maxLength={50}
-            readOnly={saving}
-            autoComplete="given-name"
-          />
-          <Button type="submit" full disabled={saving} variant={saved ? 'ghost' : 'primary'}>
-            {saved ? (
-              <>
-                <Check size={18} /> Сохранено
-              </>
-            ) : saving ? (
-              'Сохраняем...'
-            ) : (
-              'Сохранить'
-            )}
+        <div className="flex flex-col gap-3 mt-5">
+          {logoutError && <ErrorState message="Не удалось выйти. Попробуй ещё раз." />}
+          <Button variant="secondary" full disabled={leaving} onClick={handleSignOut}>
+            <LogOut size={18} aria-hidden="true" /> {leaving ? 'Выходим…' : 'Выйти из аккаунта'}
           </Button>
-        </form>
+        </div>
       </Card>
 
       {onInstall && (

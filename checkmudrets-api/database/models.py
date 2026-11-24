@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy import (
     Column, Date, DateTime, Float, ForeignKey,
-    Integer, String, Text, func,
+    Integer, String, Text, UniqueConstraint, Uuid, func,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
@@ -13,20 +13,30 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
-    """Пользователь мобильного приложения, идентифицируется по device_id."""
+    """Прикладной профиль пользователя Supabase Auth."""
 
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    device_id = Column(String(128), unique=True, nullable=False, index=True)
+    auth_user_id = Column(Uuid, unique=True, index=True)
     name = Column(String(128), nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
     # Связь с чеками
-    receipts = relationship("Receipt", back_populates="user", lazy="selectin")
+    receipts = relationship("Receipt", back_populates="user")
 
-    def __repr__(self) -> str:
-        return f"<User device_id={self.device_id} name={self.name}>"
+
+class Consent(Base):
+    __tablename__ = "consents"
+    __table_args__ = (UniqueConstraint("user_id", "consent_type", "document_version"),)
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    consent_type = Column(String(40), nullable=False)
+    document_version = Column(String(32), nullable=False)
+    accepted_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    ip_address = Column(String(45), nullable=True)
+    user_agent = Column(String(512), nullable=True)
 
 
 class Receipt(Base):

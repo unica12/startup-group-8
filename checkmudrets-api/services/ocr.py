@@ -142,8 +142,6 @@ async def recognize_receipt(image_bytes: bytes) -> dict:
         )
 
         raw_text = response.choices[0].message.content
-        print(f"[OCR RAW] {raw_text[:500]}")
-        logger.info(f"[OCR RAW] {raw_text[:500]}")
 
         data = _parse_json_response(raw_text)
 
@@ -162,5 +160,5 @@ async def recognize_receipt(image_bytes: bytes) -> dict:
         return {"success": False, "reason": "Ошибка парсинга ответа ИИ"}
 
     except Exception as e:
-        logger.error(f"OCR ошибка: {e}")
+        logger.error("Ошибка обращения к OCR: %s", type(e).__name__)
         return {"success": False, "reason": "Ошибка обработки чека"}

@@ -117,7 +117,7 @@ async def generate_advice(expenses_data: dict) -> str:
         return advice_text
 
     except Exception as e:
-        logger.error(f"Ошибка OpenAI при генерации советов: {e}")
+        logger.error("Ошибка OpenAI при генерации советов: %s", type(e).__name__)
         return "😕 Не удалось получить советы. Попробуй позже."
 
 
@@ -155,5 +155,5 @@ async def generate_mini_advice(items: list) -> str:
         return result
 
     except Exception as e:
-        logger.error(f"Ошибка генерации мини-совета: {e}")
+        logger.error("Ошибка генерации мини-совета: %s", type(e).__name__)
         return ""
