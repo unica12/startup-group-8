@@ -1,4 +1,13 @@
 const moneyFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+const decimalFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
+
+export function formatDecimal(value) {
+  return decimalFmt.format(Number(value)).replace(/\u00a0|\u202f/g, ' ');
+}
+
+export function formatExactMoney(value) {
+  return `${formatDecimal(value)} ₽`;
+}
 
 /** 1234.5 → «1 235 ₽» (обычный пробел как разделитель тысяч) */
 export function formatMoney(n) {

@@ -2,7 +2,7 @@ import json
 import os
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
 from threading import Thread
@@ -75,7 +75,7 @@ class AuthTests(unittest.TestCase):
             self.assertEqual(response.status_code, 401, endpoint)
             self.assertEqual(response.headers["www-authenticate"], "Bearer")
         self.assertEqual(self.client.post("/auth/register", json={}).status_code, 404)
-        self.assertEqual(self.client.post("/receipts", files={"file": ("receipt.png", b"x", "image/png")}).status_code, 401)
+        self.assertEqual(self.client.post("/receipts/recognize", files={"file": ("receipt.png", b"x", "image/png")}).status_code, 401)
         invalid = [
             self.auth(key=ec.generate_private_key(ec.SECP256R1())),
             self.auth(exp=datetime.now(timezone.utc) - timedelta(seconds=1)),
@@ -121,32 +121,102 @@ class AuthTests(unittest.TestCase):
             self.assertEqual(row.ip_address, "127.0.0.1")
             self.assertEqual(row.user_agent, "testclient")
 
-    def test_receipt_and_derived_data_belong_to_authenticated_account(self):
+    def test_receipt_review_ownership_idempotency_and_derived_data(self):
+        from services.receipt_validation import from_ocr
+
         first, second = self.auth(), self.auth()
         owner = self.accept(first).json()
         self.assertTrue(self.accept(second).json()["consents_complete"])
-        parsed = {"success": True, "store_name": "Тестовый магазин", "total": 12.5, "items": [
-            {"name": "Кофе", "quantity": 1, "price": 12.5, "total": 12.5, "category": "Кофе"},
-        ]}
+        today = date.today()
+        parsed = {"store_name": "Тестовый магазин", "date": today.isoformat(),
+                  "total": "26", "items": [{
+            "raw_name": "Кофе тест молотый 250г", "name": "Кофе Тест молотый 250 г", "brand": "Тест",
+            "quantity": "1", "unit": "шт", "price": "13", "total": "13", "category": "Кофе",
+            "package_size": "250", "package_unit": "г",
+        }]}
 
-        with (
-            patch("routers.receipts.recognize_receipt", AsyncMock(return_value=parsed)),
-            patch("routers.receipts.generate_mini_advice", AsyncMock(return_value="Совет")),
-            patch("routers.advice.generate_advice", AsyncMock(side_effect=lambda costs: str(costs["total_receipts"]))),
-        ):
-            upload = self.client.post("/receipts", headers=first,
-                files={"file": ("receipt.png", b"test", "image/png")}, data={"user_id": "999"})
-            self.assertEqual(upload.status_code, 200)
-            receipt = upload.json()["receipt"]
-            self.assertGreater(receipt["items"][0]["id"], 0)
-            for headers, count in ((first, 1), (second, 0)):
-                params = {"user_id": owner["id"], "receipt_id": receipt["id"], "device_id": "legacy"}
-                listing = self.client.get("/receipts", headers=headers, params=params)
-                self.assertEqual(listing.headers["cache-control"], "no-store")
-                self.assertEqual(len(listing.json()["receipts"]), count)
-                for endpoint in ("/stats", "/report"):
-                    data = self.client.get(endpoint, headers=headers, params=params).json()
-                    self.assertEqual(data["receipts_count"], count)
-                    self.assertEqual(data["total_spent"], 12.5 * count)
-                advice = self.client.get("/advice", headers=headers, params=params).json()
-                self.assertEqual(advice["advice"], str(count))
+        def recognize(payload):
+            receipt, warnings = from_ocr(payload)
+            with patch("routers.receipts.recognize_receipt", AsyncMock(return_value=(receipt, warnings, False))):
+                return self.client.post("/receipts/recognize", headers=first,
+                    files={"file": ("receipt.png", b"synthetic", "image/png")},
+                    data={"user_id": "999"}).json()
+
+        draft = recognize(parsed)
+        self.assertTrue(draft["success"])
+        self.assertTrue(draft["warnings"])
+        path = f'/receipts/{draft["draft_id"]}/confirm'
+        review = {"receipt": draft["receipt"]}
+        self.assertEqual(self.client.post(path, headers=second, json=review).status_code, 404)
+        self.assertEqual(self.client.get("/receipts", headers=first).json()["total_count"], 0)
+        self.assertEqual(self.client.get("/stats", headers=first).json()["receipts_count"], 0)
+        self.assertEqual(self.client.post(path, headers=first, json=review).status_code, 409)
+        self.assertEqual(self.client.get("/receipts", headers=first).json()["total_count"], 0)
+
+        # Исправляем магазин, количество и стоимость до сохранения.
+        review["receipt"]["store_name"] = "Магазин А"
+        review["receipt"]["items"][0].update(quantity="2", total="26")
+        with ThreadPoolExecutor(max_workers=3) as threads:
+            saves = list(threads.map(lambda _: self.client.post(path, headers=first, json=review), range(3)))
+        self.assertEqual([response.status_code for response in saves], [200, 200, 200])
+        records = [response.json()["receipt"] for response in saves]
+        self.assertEqual(len({row["id"] for row in records}), 1)
+        receipt = records[0]
+        self.assertEqual(receipt["store_name"], "Магазин А")
+        self.assertEqual(receipt["items"][0]["quantity"], 2)
+        self.assertGreater(receipt["items"][0]["id"], 0)
+        self.assertEqual(self.client.get("/receipts", headers=first).json()["total_count"], 1)
+
+        cheaper = recognize(parsed | {"store_name": "Магазин Б", "total": "10",
+                                     "items": [parsed["items"][0] | {"price": "10", "total": "10"}]})
+        second_save = self.client.post(f'/receipts/{cheaper["draft_id"]}/confirm', headers=first,
+                                       json={"receipt": cheaper["receipt"]})
+        self.assertEqual(second_save.status_code, 200)
+        self.assertIsNone(second_save.json()["mini_advice"])
+        another = recognize(parsed | {"store_name": "Магазин А", "total": "13", "date": today.isoformat()})
+        mini = self.client.post(f'/receipts/{another["draft_id"]}/confirm', headers=first,
+                                json={"receipt": another["receipt"]})
+        self.assertEqual(mini.json()["mini_advice"]["type"], "store_comparison")
+        self.assertEqual(mini.json()["mini_advice"]["metric"]["value"], "3.00")
+
+        for headers, count, total in ((first, 3, 49), (second, 0, 0)):
+            params = {"user_id": owner["id"], "receipt_id": receipt["id"], "device_id": "legacy"}
+            listing = self.client.get("/receipts", headers=headers, params=params)
+            self.assertEqual(listing.headers["cache-control"], "no-store")
+            self.assertEqual(len(listing.json()["receipts"]), count)
+            for endpoint in ("/stats", "/report"):
+                data = self.client.get(endpoint, headers=headers, params=params).json()
+                self.assertEqual(data["receipts_count"], count)
+                self.assertEqual(data["total_spent"], total)
+            advice = self.client.get("/advice", headers=headers, params=params).json()
+            if count:
+                self.assertIn("store_comparison", [item["type"] for item in advice["insights"]])
+            else:
+                self.assertEqual(advice["insights"], [])
+                self.assertTrue(advice["empty_message"])
+
+    def test_confirmed_date_and_missing_unit_price_are_preserved(self):
+        from schemas.receipt_input import ReceiptInput
+
+        headers = self.auth()
+        self.accept(headers)
+        now = date.today()
+        previous = now.replace(day=1) - timedelta(days=1)
+        draft = ReceiptInput.model_validate({"date": now.isoformat(), "total": "30", "items": [
+            {"raw_name": "Тестовая позиция", "name": "Тестовая позиция", "total": "30", "category": "Продукты"},
+        ]})
+        with patch("routers.receipts.recognize_receipt", AsyncMock(return_value=(draft, [], False))):
+            preview = self.client.post("/receipts/recognize", headers=headers,
+                files={"file": ("receipt.png", b"synthetic", "image/png")}).json()
+        body = {"receipt": preview["receipt"] | {"date": previous.isoformat()}}
+        url = f'/receipts/{preview["draft_id"]}/confirm'
+        self.assertEqual(self.client.post(url, headers=headers, json=body).status_code, 409)
+        saved = self.client.post(url, headers=headers, json=body | {"accept_warnings": True})
+        self.assertEqual(saved.status_code, 200)
+        receipt = saved.json()["receipt"]
+        self.assertEqual(receipt["date"], previous.isoformat())
+        self.assertIsNone(receipt["items"][0]["price"])
+        self.assertIsNone(receipt["items"][0]["quantity"])
+        self.assertEqual(self.client.get("/stats", headers=headers).json()["receipts_count"], 0)
+        old_month = self.client.get("/stats", headers=headers, params={"month": previous.strftime("%Y-%m")}).json()
+        self.assertEqual(old_month["total_spent"], 30)

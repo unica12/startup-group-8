@@ -10,6 +10,7 @@ from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from database.models import Base
+from database.migrations import add_receipt_details
 from utils.config import SUPABASE_DB_CA_FILE, get_database_url
 
 logger = logging.getLogger(__name__)
@@ -58,6 +59,7 @@ async def init_db() -> None:
                 await conn.execute(text("SELECT pg_advisory_xact_lock(45086023)"))
                 await conn.execute(text("SET LOCAL search_path TO public"))
             await conn.run_sync(Base.metadata.create_all)
+            await add_receipt_details(conn)
             if postgres:
                 await conn.execute(text("ALTER TABLE public.users ADD COLUMN IF NOT EXISTS auth_user_id uuid"))
                 columns = await conn.run_sync(lambda sync: inspect(sync).get_columns("users", schema="public"))

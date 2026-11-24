@@ -2,9 +2,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import List, Optional
+from decimal import Decimal
+from typing import List, Literal, Optional
+from uuid import UUID
 
 from pydantic import BaseModel, Field
+
+from schemas.receipt_input import ReceiptInput, ReceiptWarning
 
 
 # ─── Auth ────────────────────────────────────────────────────────────────────
@@ -26,10 +30,16 @@ class ConsentRequest(BaseModel):
 class ItemResponse(BaseModel):
     id: int
     name: str
-    quantity: float
-    price: float
+    raw_name: str | None
+    brand: str | None
+    quantity: float | None
+    unit: str | None
+    price: float | None
+    discount: float | None
     total: float
     category: str
+    package_size: float | None
+    package_unit: str | None
 
     model_config = {"from_attributes": True}
 
@@ -39,16 +49,20 @@ class ReceiptResponse(BaseModel):
     store_name: Optional[str]
     date: Optional[date]
     total: float
-    items: List[ItemResponse] = []
+    discount: float | None
+    items: List[ItemResponse] = Field(default_factory=list)
     created_at: datetime
 
     model_config = {"from_attributes": True}
 
 
-class UploadReceiptResponse(BaseModel):
+class RecognizeReceiptResponse(BaseModel):
     success: bool
-    receipt: Optional[ReceiptResponse] = None
-    mini_advice: Optional[str] = None
+    draft_id: UUID | None = None
+    receipt: ReceiptInput | None = None
+    warnings: list[ReceiptWarning] = Field(default_factory=list)
+    retried: bool = False
+    categories: list[str] = Field(default_factory=list)
     error: Optional[str] = None
 
 
@@ -83,9 +97,33 @@ class StatsResponse(BaseModel):
 
 # ─── Advice ───────────────────────────────────────────────────────────────────
 
+class InsightMetric(BaseModel):
+    value: Decimal
+    unit: str
+    label: str
+
+
+class Insight(BaseModel):
+    type: Literal["store_comparison", "price_change", "unit_price", "shopping_frequency", "category_change",
+                  "growth_driver", "forecast", "savings"]
+    title: str
+    observation: str
+    recommendation: str
+    metric: InsightMetric
+    estimated_savings: Decimal | None = None
+    evidence: list[str]
+    confidence: Literal["medium", "high"]
+
+
 class AdviceResponse(BaseModel):
-    advice: str
+    insights: list[Insight]
+    empty_message: str | None = None
     generated_at: datetime
+
+
+class SavedReceiptResponse(BaseModel):
+    receipt: ReceiptResponse
+    mini_advice: Insight | None = None
 
 
 # ─── Report ───────────────────────────────────────────────────────────────────
@@ -106,7 +144,7 @@ class ReportResponse(BaseModel):
     period: ReportPeriod
     total_spent: float
     receipts_count: int
-    change_pct: float
+    change_pct: float | None
     change_text: str
     top_categories: List[TopCategory]
     summary_text: str

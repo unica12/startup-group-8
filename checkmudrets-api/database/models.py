@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from sqlalchemy import (
-    Column, Date, DateTime, Float, ForeignKey,
+    Boolean, Column, Date, DateTime, Float, ForeignKey,
     Integer, String, Text, UniqueConstraint, Uuid, func,
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
@@ -39,6 +39,15 @@ class Consent(Base):
     user_agent = Column(String(512), nullable=True)
 
 
+class ReceiptDraft(Base):
+    """Токен подтверждения с владельцем. Фото и содержимое черновика живут в браузере."""
+
+    __tablename__ = "receipt_drafts"
+    id = Column(Uuid, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+
+
 class Receipt(Base):
     """Кассовый чек."""
 
@@ -46,9 +55,12 @@ class Receipt(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    draft_id = Column(Uuid, ForeignKey("receipt_drafts.id"), unique=True, index=True)
     store_name = Column(String(256), nullable=True)
     date = Column(Date, nullable=True)
     total = Column(Float, default=0.0, nullable=False)
+    discount = Column(Float, nullable=True)
+    price_comparable = Column(Boolean, nullable=True)
     raw_text = Column(Text, nullable=True)
     created_at = Column(DateTime, default=func.now(), nullable=False)
 
@@ -71,10 +83,16 @@ class Item(Base):
     id = Column(Integer, primary_key=True, autoincrement=True)
     receipt_id = Column(Integer, ForeignKey("receipts.id"), nullable=False, index=True)
     name = Column(String(256), nullable=False)
-    quantity = Column(Float, default=1.0, nullable=False)
-    price = Column(Float, default=0.0, nullable=False)
+    raw_name = Column(String(256), nullable=True)
+    brand = Column(String(128), nullable=True)
+    quantity = Column(Float, nullable=True)
+    unit = Column(String(2), nullable=True)
+    price = Column(Float, nullable=True)
+    discount = Column(Float, nullable=True)
     total = Column(Float, default=0.0, nullable=False)
     category = Column(String(64), default="Другое", nullable=False)
+    package_size = Column(Float, nullable=True)
+    package_unit = Column(String(2), nullable=True)
 
     # Связь с чеком
     receipt = relationship("Receipt", back_populates="items")

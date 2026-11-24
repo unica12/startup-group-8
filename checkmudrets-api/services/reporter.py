@@ -18,7 +18,8 @@ def build_weekly_report(stats: dict) -> dict:
     total_sum = stats.get("total_sum", 0.0)
     receipts_count = stats.get("receipts_count", 0)
     top_categories = stats.get("top_categories", [])
-    change_pct = stats.get("change_pct", 0.0)
+    change_pct = stats.get("change_pct")
+    change_text = format_change(change_pct) if change_pct is not None else "Пока недостаточно чеков для сравнения недель."
     week_start = stats.get("week_start")
     week_end = stats.get("week_end")
 
@@ -31,7 +32,7 @@ def build_weekly_report(stats: dict) -> dict:
         "",
         f"💰 Потрачено: {format_money(total_sum)}",
         f"🧾 Чеков: {receipts_count}",
-        format_change(change_pct),
+        change_text,
     ]
 
     if top_categories:
@@ -68,8 +69,8 @@ def build_weekly_report(stats: dict) -> dict:
         },
         "total_spent": round(total_sum, 2),
         "receipts_count": receipts_count,
-        "change_pct": round(change_pct, 1),
-        "change_text": format_change(change_pct),
+        "change_pct": round(change_pct, 1) if change_pct is not None else None,
+        "change_text": change_text,
         "top_categories": top_categories_data,
         "summary_text": "\n".join(lines),
     }

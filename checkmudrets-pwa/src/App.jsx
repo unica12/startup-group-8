@@ -65,11 +65,11 @@ function BudgetApp({ userId, profile, onInstall }) {
 
   const renderPage = () => {
     switch (page) {
-      case 'scan': return <Scan onNavigate={setPage} />;
+      case 'scan': return <Scan onNavigate={setPage} userId={userId} />;
       case 'history': return <History onNavigate={setPage} />;
       case 'stats': return <Stats onNavigate={setPage} />;
       case 'profile': return <Profile profile={profile} onInstall={onInstall} />;
-      default: return <Home onNavigate={setPage} userName={profile.name} userId={userId} />;
+      default: return <Home onNavigate={setPage} userName={profile.name} />;
     }
   };
 

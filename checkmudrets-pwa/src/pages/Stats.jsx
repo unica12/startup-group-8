@@ -6,6 +6,7 @@ import Loader from '../components/Loader';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
 import Mascot from '../components/Mascot';
+import InsightList from '../components/InsightCard';
 import DonutChart, { ChartLegend } from '../components/DonutChart';
 import { Button, Card, Tag } from '../components/ui';
 
@@ -57,8 +58,7 @@ export default function Stats({ onNavigate }) {
   const loadAdvice = async () => {
     setAdvice({ loading: true });
     try {
-      const { advice: text } = await getAdvice();
-      setAdvice({ text });
+      setAdvice({ data: await getAdvice({ personalize: true }) });
     } catch {
       setAdvice({ error: true });
     }
@@ -145,30 +145,21 @@ export default function Stats({ onNavigate }) {
             </Card>
           )}
 
-          {!advice ? (
-            <Button variant="ghost" full onClick={loadAdvice}>
-              <Lightbulb size={18} /> Получить советы по экономии
-            </Button>
-          ) : (
-            <section className="rounded-card bg-pill p-5">
-              <div className="flex items-center gap-3 mb-2">
-                <Mascot size={40} withLines={false} />
-                <div>
-                  <h2>Советы мудреца</h2>
-                  <p className="text-xs text-text-soft">По расходам за последние 30 дней</p>
-                </div>
-              </div>
-              {advice.loading ? (
-                <Loader text="Думаю над советами..." />
-              ) : advice.error ? (
-                <ErrorState message="Не удалось загрузить советы." onRetry={loadAdvice} />
-              ) : (
-                <p className="text-sm whitespace-pre-line wrap-anywhere">{advice.text || 'Советов пока нет.'}</p>
-              )}
-            </section>
-          )}
         </>
       )}
+      <section className="grid gap-3">
+        <div className="flex items-center gap-2">
+          <Mascot size={40} withLines={false} className="shrink-0" />
+          <div>
+            <h2 className="text-xl">Финансовые инсайты</h2>
+            <p className="text-xs text-text-soft">По истории покупок до сегодняшнего дня</p>
+          </div>
+        </div>
+        {!advice && <Button variant="ghost" onClick={loadAdvice}><Lightbulb size={18} /> Открыть финансовые инсайты</Button>}
+        {advice?.loading && <Loader text="Подбираем рекомендации..." />}
+        {advice?.error && <ErrorState message="Не удалось загрузить инсайты." onRetry={loadAdvice} />}
+        {advice?.data && <InsightList data={advice.data} />}
+      </section>
     </div>
   );
 }

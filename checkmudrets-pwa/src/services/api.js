@@ -1,11 +1,6 @@
 import { supabase } from './supabase';
 
 const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
-const adviceKey = (userId) => `checkmudrets:last-advice:${userId}`;
-
-export function getLastAdvice(userId) {
-  return localStorage.getItem(adviceKey(userId)) || '';
-}
 
 async function getSession(expectedUser) {
   const { data, error } = await supabase.auth.getSession();
@@ -30,6 +25,7 @@ async function request(path, options = {}, session) {
     }
     const error = new Error(`Ошибка сервера (${response.status})`);
     error.status = response.status;
+    error.detail = (await response.json().catch(() => null))?.detail;
     throw error;
   }
   return response.json();
@@ -48,19 +44,20 @@ export async function recordConsents(userId, consents, signal) {
   }, await getSession(userId));
 }
 
-export async function uploadReceipt(file) {
-  const session = await getSession();
+export async function recognizeReceipt(file, userId) {
+  const session = await getSession(userId);
   const form = new FormData();
   form.append('file', file);
-  const result = await request('/receipts', { method: 'POST', body: form }, session);
-  if (result.success && result.mini_advice) {
-    try {
-      localStorage.setItem(adviceKey(session.user.id), result.mini_advice);
-    } catch {
-      // Чек уже сохранён на сервере, даже если кеш браузера недоступен.
-    }
-  }
-  return result;
+  return request('/receipts/recognize', { method: 'POST', body: form }, session);
+}
+
+export async function confirmReceipt(draftId, receipt, acceptWarnings, userId) {
+  const session = await getSession(userId);
+  return request(`/receipts/${draftId}/confirm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receipt, accept_warnings: acceptWarnings }),
+  }, session);
 }
 
 export function getReceipts(limit = 20, signal) {
@@ -71,8 +68,8 @@ export function getStats(month = '', signal) {
   return request(month ? `/stats?month=${encodeURIComponent(month)}` : '/stats', { signal });
 }
 
-export function getAdvice() {
-  return request('/advice');
+export function getAdvice({ personalize = false, signal } = {}) {
+  return request(personalize ? '/advice?personalize=true' : '/advice', { signal });
 }
 
 export function getReport(signal) {

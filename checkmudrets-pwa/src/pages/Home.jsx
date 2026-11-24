@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react';
 import { ChevronRight } from 'lucide-react';
-import { getStats, getReceipts, getReport, getLastAdvice } from '../services/api';
+import { getStats, getReceipts, getReport, getAdvice } from '../services/api';
 import { formatMoney, monthAccusative, formatDateShort, plural, toChartSegments } from '../utils/format';
 import Loader from '../components/Loader';
 import ErrorState from '../components/ErrorState';
 import Mascot from '../components/Mascot';
 import Logo from '../components/Logo';
+import InsightList from '../components/InsightCard';
 import DonutChart, { ChartLegend } from '../components/DonutChart';
 import { Button, Card, Tag } from '../components/ui';
 
@@ -14,7 +15,7 @@ function currentMonth() {
   return { str: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`, index: d.getMonth() };
 }
 
-export default function Home({ onNavigate, userName, userId }) {
+export default function Home({ onNavigate, userName }) {
   const [{ str: month, index: monthIndex }] = useState(currentMonth);
   const [data, setData] = useState(null);
   const [attempt, setAttempt] = useState(0);
@@ -22,10 +23,10 @@ export default function Home({ onNavigate, userName, userId }) {
   useEffect(() => {
     const controller = new AbortController();
     const { signal } = controller;
-    Promise.allSettled([getStats(month, signal), getReceipts(3, signal), getReport(signal)])
-      .then(([stats, receipts, report]) => {
+    Promise.allSettled([getStats(month, signal), getReceipts(3, signal), getReport(signal), getAdvice({ signal })])
+      .then(([stats, receipts, report, advice]) => {
         if (!signal.aborted) {
-          setData({ stats: stats.value, receipts: receipts.value?.receipts, report: report.value });
+          setData({ stats: stats.value, receipts: receipts.value?.receipts, report: report.value, advice: advice.value });
         }
       });
     return () => controller.abort();
@@ -36,17 +37,16 @@ export default function Home({ onNavigate, userName, userId }) {
     setAttempt((value) => value + 1);
   }
 
-  const { stats, receipts, report } = data || {};
+  const { stats, receipts, report, advice } = data || {};
   const segments = stats ? toChartSegments(stats.by_category, 4) : [];
-  const lastAdvice = getLastAdvice(userId);
   const weekSummary = report?.receipts_count > 0
     ? `За неделю потрачено ${formatMoney(report.total_spent)}.${report.change_pct ? ` ${report.change_text}` : ''}`
     : '';
-  const adviceText = lastAdvice || weekSummary || (report && 'Сфоткай чек — и я подскажу, где можно сэкономить.');
   const failedSections = [
     !stats && 'расходы за месяц',
     !receipts && 'последние чеки',
-    !report && !lastAdvice && 'сводку за неделю',
+    !report && 'сводку за неделю',
+    !advice && 'финансовые инсайты',
   ].filter(Boolean);
 
   return (
@@ -126,10 +126,17 @@ export default function Home({ onNavigate, userName, userId }) {
         </Card>
       )}
 
-      {adviceText && (
-        <section aria-label="Совет мудреца" className="rounded-input bg-pill p-4 flex items-center gap-3">
+      {weekSummary && (
+        <section aria-label="Сводка за неделю" className="rounded-input bg-pill p-4 flex items-center gap-3">
           <Mascot size={44} withLines={false} className="shrink-0" />
-          <p className="text-[13.5px] font-extrabold text-green-shadow leading-snug whitespace-pre-line wrap-anywhere">{adviceText}</p>
+          <p className="text-[13.5px] font-extrabold text-brand leading-snug wrap-anywhere">{weekSummary}</p>
+        </section>
+      )}
+      {advice && (
+        <section className="grid gap-3">
+          <h2 className="text-xl">Финансовые инсайты</h2>
+          <InsightList data={advice} limit={2} />
+          {advice.insights.length > 0 && <Button variant="ghost" onClick={() => onNavigate('stats')}>К статистике</Button>}
         </section>
       )}
     </div>

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { getReceipts } from '../services/api';
-import { formatMoney, formatDateShort, plural } from '../utils/format';
+import { formatExactMoney, formatDateShort, plural } from '../utils/format';
 import Loader from '../components/Loader';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -29,7 +29,7 @@ function ReceiptCard({ receipt }) {
             {date && `${date} · `}{count} {plural(count, ['позиция', 'позиции', 'позиций'])}
           </p>
         </div>
-        <span className="num text-[15px] font-extrabold text-right wrap-anywhere">{formatMoney(receipt.total)}</span>
+        <span className="num text-[15px] font-extrabold text-right wrap-anywhere">{formatExactMoney(receipt.total)}</span>
         <ChevronDown size={18} aria-hidden="true" className={`shrink-0 text-text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && count > 0 && (
@@ -38,9 +38,9 @@ function ReceiptCard({ receipt }) {
             <li key={item.id ?? item.name} className="py-2.5 flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-[14px] font-bold wrap-anywhere">{item.name}</p>
-                <p className="text-[12px] text-text-muted">{item.category}</p>
+                <p className="text-[12px] text-text-muted">{item.category}{item.quantity != null && item.unit && ` · ${String(item.quantity).replace('.', ',')} ${item.unit}`}</p>
               </div>
-              <span className="num text-[14px] font-bold text-right wrap-anywhere">{formatMoney(item.total)}</span>
+              <span className="num text-[14px] font-bold text-right wrap-anywhere">{formatExactMoney(item.total)}</span>
             </li>
           ))}
         </ul>
