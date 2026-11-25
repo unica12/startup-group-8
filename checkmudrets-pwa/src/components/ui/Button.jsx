@@ -2,6 +2,7 @@ const VARIANTS = {
   primary: 'bg-brand text-white hover:bg-brand-hover',
   secondary: 'bg-white text-text border border-line-strong hover:border-brand',
   ghost: 'bg-pill text-text hover:bg-line',
+  danger: 'bg-danger text-white hover:bg-danger/90',
 };
 
 const SIZES = {

@@ -18,3 +18,12 @@ export const CONSENT_DOCUMENTS = [
 
 export const acceptedVersions = Object.fromEntries(CONSENT_DOCUMENTS.map(({ id, version }) => [id, version]));
 export const allConsentsChecked = (checked) => CONSENT_DOCUMENTS.every(({ id }) => checked[id]);
+
+export const PROFILE_DOCUMENTS = [
+  {
+    id: 'privacy',
+    title: 'Политика конфиденциальности',
+    text: 'ЧекМудрец использует имя, электронную почту, чеки и историю покупок для учёта расходов. Фото передаётся для распознавания. В приложении сохраняются распознанные данные чека и товарные позиции. При принятии согласий фиксируются их версии, время, IP-адрес и сведения о браузере. Из профиля можно скачать свои данные или запросить удаление аккаунта вместе с историей и согласиями.',
+  },
+  ...CONSENT_DOCUMENTS,
+];

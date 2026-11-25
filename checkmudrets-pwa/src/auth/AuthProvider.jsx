@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState } from 'react';
-import { getMe, recordConsents } from '../services/api';
-import { emailRedirectUrl, supabase } from '../services/supabase';
+import { apiConfigured, deleteProfile, getMe, recordConsents, updateProfile } from '../services/api';
+import { emailRedirectUrl, forgetDeletedSession, supabase } from '../services/supabase';
 import { acceptedVersions } from './documents';
 import { AuthContext } from './context';
 const pendingKey = (id) => `checkmudrets:pending-consents:${id}`;
+
+async function clearLocalAccountData(id) {
+  try {
+    for (const key of ['checkmudrets_device_id', 'checkmudrets_user_name', 'checkmudrets_last_advice',
+      pendingKey(id), `checkmudrets:last-advice:${id}`]) {
+      localStorage.removeItem(key);
+    }
+  } catch { /* Браузер ограничил доступ к хранилищу. */ }
+  await Promise.allSettled(['api-receipts', 'api-stats'].map((name) => window.caches?.delete(name)));
+}
+
+function deletionPending(error) {
+  return error.detail?.code === 'account_deletion_pending';
+}
 
 function pendingConsents(id, remove = false) {
   try {
@@ -26,6 +40,7 @@ export default function AuthProvider({ children }) {
     if (!supabase) return;
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, next) => {
       if (lastUser.current !== next?.user.id) {
+        if (lastUser.current) void clearLocalAccountData(lastUser.current);
         lastUser.current = next?.user.id;
         setAccount(null);
         setAttempt((value) => value + 1);
@@ -36,7 +51,7 @@ export default function AuthProvider({ children }) {
   }, []);
 
   useEffect(() => {
-    if (!userId) return;
+    if (!userId || !apiConfigured) return;
     const controller = new AbortController();
     const { signal } = controller;
 
@@ -53,8 +68,8 @@ export default function AuthProvider({ children }) {
         }
         if (pending) pendingConsents(userId, true);
         if (!signal.aborted) setAccount({ userId, profile });
-      } catch {
-        if (!signal.aborted) setAccount({ userId, error: true });
+      } catch (error) {
+        if (!signal.aborted) setAccount(deletionPending(error) ? { userId, deletionPending: true } : { userId, error: true });
       }
     }
 
@@ -97,7 +112,50 @@ export default function AuthProvider({ children }) {
   async function signOut() {
     const { error } = await supabase.auth.signOut({ scope: 'local' });
     if (error) throw error;
+    if (userId) await clearLocalAccountData(userId);
     setAccount(null);
+  }
+
+  async function saveName(name) {
+    const profile = await updateProfile(userId, name);
+    if (lastUser.current === userId) setAccount({ userId, profile });
+  }
+
+  async function verifyPassword(password) {
+    const email = session?.user.email;
+    if (!email) throw new Error('Для повторного входа нужен email.');
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+    if (data.user?.id !== userId || lastUser.current !== userId) throw new Error('Сессия изменилась.');
+  }
+
+  async function changePassword(currentPassword, password) {
+    await verifyPassword(currentPassword);
+    const { error } = await supabase.auth.updateUser({ password, current_password: currentPassword });
+    if (error) throw error;
+  }
+
+  async function deleteAccount(password) {
+    if (password !== undefined) await verifyPassword(password);
+    try {
+      await deleteProfile(userId);
+    } catch (error) {
+      if (deletionPending(error) && lastUser.current === userId) setAccount({ userId, deletionPending: true });
+      throw error;
+    }
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (data.session?.user.id === userId) await signOut();
+      if (!data.session && lastUser.current === userId) setSession(null);
+    } catch {
+      if (lastUser.current === userId) {
+        forgetDeletedSession();
+        setSession(null);
+        setAccount(null);
+      }
+    }
+    await clearLocalAccountData(userId);
   }
 
   async function confirmConsents() {
@@ -108,8 +166,8 @@ export default function AuthProvider({ children }) {
 
   return (
     <AuthContext.Provider value={{
-      session, account: account?.userId === userId ? account : null, configured: Boolean(supabase),
-      signUp, signIn, resendEmail, signOut, reloadProfile, confirmConsents,
+      session, account: account?.userId === userId ? account : null, configured: Boolean(supabase) && apiConfigured,
+      signUp, signIn, resendEmail, signOut, reloadProfile, confirmConsents, saveName, changePassword, deleteAccount,
     }}>
       {children}
     </AuthContext.Provider>

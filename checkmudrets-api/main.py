@@ -1,8 +1,9 @@
 """Точка входа FastAPI-приложения ЧекМудрец."""
 from __future__ import annotations
 
+import asyncio
 import logging
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -10,7 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from database.db import close_db, init_db
 from routers import advice, auth, receipts, report, stats
-from utils.config import HOST, PORT, validate_config
+from services.account_deletion import retry_pending_deletions
+from utils.config import CORS_ORIGINS, HOST, PORT, SUPABASE_SECRET_KEY, validate_config
 
 # Настройка логирования
 logging.basicConfig(
@@ -23,11 +25,18 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     validate_config()
+    deletions = None
     try:
         await init_db()
+        if SUPABASE_SECRET_KEY:
+            deletions = asyncio.create_task(retry_pending_deletions())
         logger.info("ЧекМудрец API запущен")
         yield
     finally:
+        if deletions is not None:
+            deletions.cancel()
+            with suppress(asyncio.CancelledError):
+                await deletions
         await close_db()
         logger.info("ЧекМудрец API остановлен")
 
@@ -39,10 +48,9 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — открываем для всех origins (MVP)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )

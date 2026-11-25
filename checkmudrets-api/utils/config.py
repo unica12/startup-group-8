@@ -23,6 +23,9 @@ DATABASE_URL: str = os.getenv(
 )
 SUPABASE_DB_CA_FILE = os.getenv("SUPABASE_DB_CA_FILE")
 SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET")
+SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", "").strip()
+LOCAL_ORIGINS = "http://localhost:5173,http://127.0.0.1:5173,http://localhost:4173,http://127.0.0.1:4173"
+CORS_ORIGINS = [origin.strip().rstrip("/") for origin in os.getenv("CORS_ORIGINS", LOCAL_ORIGINS).split(",") if origin.strip()]
 
 
 def get_database_url():
@@ -63,8 +66,10 @@ PORT: int = int(os.getenv("PORT", "8000"))
 
 
 def validate_config() -> None:
-    get_supabase_url()
     """Проверить что обязательные переменные заполнены."""
+    get_supabase_url()
+    if SUPABASE_SECRET_KEY and not SUPABASE_SECRET_KEY.startswith("sb_secret_"):
+        raise ValueError("SUPABASE_SECRET_KEY должен быть серверным ключом Supabase (sb_secret_…).")
     if not OPENAI_API_KEY:
         raise ValueError(
             "Отсутствует обязательная переменная OPENAI_API_KEY. "

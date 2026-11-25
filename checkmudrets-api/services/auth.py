@@ -12,8 +12,9 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from database.accounts import account_fingerprint, lock_account
 from database.db import get_session
-from database.models import User
+from database.models import AccountDeletion, User
 from database.queries import get_or_create_user, get_user_consents
 from utils.config import SUPABASE_JWT_SECRET, get_supabase_url
 
@@ -31,6 +32,7 @@ class Identity:
     auth_user_id: UUID
     email: str | None
     name: str | None
+    password_authenticated_at: int | None = None
 
 
 class SigningKeys:
@@ -94,12 +96,28 @@ def verify_access_token(credentials: HTTPAuthorizationCredentials | None = Depen
     else:
         name = None
     email = claims.get("email")
-    return Identity(user_id, email if isinstance(email, str) else None, name)
+    methods = claims.get("amr")
+    authenticated_at = max((
+        method["timestamp"] for method in methods
+        if isinstance(method, dict) and method.get("method") == "password" and type(method.get("timestamp")) is int
+    ), default=None) if isinstance(methods, list) else None
+    return Identity(user_id, email if isinstance(email, str) else None, name, authenticated_at)
+
+
+async def ensure_account_available(session: AsyncSession, auth_user_id: UUID) -> None:
+    key = account_fingerprint(auth_user_id)
+    await lock_account(session, key)
+    deletion = await session.get(AccountDeletion, key)
+    if deletion and deletion.auth_user_id is None:
+        raise HTTPException(401, "Аккаунт удалён.", headers={"WWW-Authenticate": "Bearer"})
+    if deletion:
+        raise HTTPException(409, detail={"code": "account_deletion_pending", "message": "Удаление аккаунта ещё выполняется."})
 
 
 async def current_user(
     identity: Identity = Depends(verify_access_token), session: AsyncSession = Depends(get_session),
 ) -> User:
+    await ensure_account_available(session, identity.auth_user_id)
     return await get_or_create_user(session, identity.auth_user_id, identity.name)
 
 

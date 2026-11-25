@@ -44,23 +44,31 @@ startup-group-8/            (ветка main)
 - `vercel.json` — остаток от старого плана, можно удалить.
 
 ### Backend (`checkmudrets-api/`)
-- `main.py` — FastAPI, CORS `allow_origins=["*"]`, роутеры auth/receipts/stats/advice/report, `/health`.
+- `main.py` — FastAPI, список разрешённых источников CORS из `CORS_ORIGINS`, роутеры auth/receipts/stats/advice/report, `/health`.
 - `services/ocr.py` читает чек через GPT Vision и Structured Outputs. `services/receipt_validation.py` проверяет поля и арифметику с `Decimal` и даёт модели конкретные расхождения для одного повтора.
 - `services/analytics.py` рассчитывает финансовые инсайты. `services/advisor.py` подбирает практическое действие к факту и кэширует выбор. Короткое наблюдение после сохранения строится по той же истории цен.
 - `services/reporter.py` — недельный отчёт с изменением к прошлой неделе.
-- `database/models.py` — User(id, auth_user_id UUID unique, name, created_at), ReceiptDraft, Receipt, Item, Consent. Внешние ключи чеков и позиций используют прежние целочисленные ID.
+- `database/models.py` — User(id, auth_user_id UUID unique, name, created_at), ReceiptDraft, Receipt, Item, Consent, AccountDeletion. Внешние ключи чеков и позиций используют прежние целочисленные ID.
 - `database/db.py` подключается к PostgreSQL с проверкой сертификата и имени хоста. На старте создаёт таблицы, добавляет недостающий UUID в существующую `users`, включает RLS и отзывает права Data API для прикладных таблиц и их последовательностей. Старые строки остаются в базе без привязки к новым сессиям. SQLite используется для изолированных тестов.
 - `services/auth.py` проверяет JWT по JWKS Supabase, включая подпись, issuer, audience, срок действия и `sub`. API привязывает данные к проверенному UUID.
-- `utils/config.py` читает `OPENAI_API_KEY`, `OPENAI_MODEL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_DB_CA_FILE`, `HOST`, `PORT`. У Session pooler URL проекта определяется из имени пользователя БД, если `SUPABASE_URL` опущен. `SUPABASE_JWT_SECRET` используется только при явной поддержке legacy HS256 на сервере. Для `checkmudrets` JWKS публикует ES256.
+- `utils/config.py` читает `OPENAI_API_KEY`, `OPENAI_MODEL`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_DB_CA_FILE`, `SUPABASE_SECRET_KEY`, `CORS_ORIGINS`, `HOST`, `PORT`. Серверный `SUPABASE_SECRET_KEY` включает удаление аккаунта через Supabase Auth. У Session pooler URL проекта определяется из имени пользователя БД, если `SUPABASE_URL` опущен. `SUPABASE_JWT_SECRET` используется только при явной поддержке legacy HS256 на сервере. Для `checkmudrets` JWKS публикует ES256.
 - Swagger: `http://localhost:8000/docs` — источник правды по контракту, если этот файл с ним расходится.
 
 ---
 
 ## API-контракт (текущий, сверен с `schemas/models.py`)
 
-Для `/auth/me`, `/auth/consents`, `/receipts`, `/stats`, `/advice` и `/report` нужен `Authorization: Bearer <access_token>` из Supabase Auth. При отсутствующем, неверном или просроченном токене API возвращает `401`. Для операций с расходами без обязательных согласий API возвращает `403` с кодом `consents_required`.
+Для `/auth/me` и его вложенных маршрутов, `/auth/consents`, `/receipts`, `/stats`, `/advice` и `/report` нужен `Authorization: Bearer <access_token>` из Supabase Auth. При отсутствующем, неверном или просроченном токене API возвращает `401`. Для операций с расходами без обязательных согласий API возвращает `403` с кодом `consents_required`.
 
-**GET /auth/me** — идемпотентно создаёт прикладной профиль и возвращает `{ id, name, email, created_at, consents_complete }`. Вход и регистрация выполняются через Supabase Auth.
+**GET /auth/me** — идемпотентно создаёт прикладной профиль и возвращает `{ id, name, email, created_at, consents_complete }`. `created_at` берётся из даты регистрации в Supabase Auth. Вход и регистрация выполняются через Supabase Auth.
+
+**PATCH /auth/me** — принимает `{ "name": "Анна Иванова" }`, убирает лишние пробелы, принимает имя длиной от 1 до 80 символов и возвращает обновлённый профиль. Имя хранится в прикладной БД. Метаданные Supabase используются при создании профиля. Смена пароля целиком проходит через Supabase Auth.
+
+**GET /auth/me/stats** — возвращает `{ receipts_count, total_spent, items_count, top_category }` по всем подтверждённым чекам пользователя. Сервер агрегирует деньги в копейках и отдаёт `total_spent` десятичной строкой в рублях. Если положительных расходов по именованным категориям нет, `top_category` равна `null`.
+
+**GET /auth/me/export** — JSON-файл `checkmudrets-export-ГГГГ-ММ-ДД.json` с профилем, всеми подтверждёнными чеками и позициями, записями о согласиях и датой экспорта. Выборка ограничена владельцем из JWT.
+
+**DELETE /auth/me** — останавливает работу с данными аккаунта, удаляет их и вызывает административный API Supabase Auth. Первый запрос требует входа по паролю в последние пять минут. При сбое Admin API возвращается `503`, операция сохраняется и повторяется сервером и по явному запросу. Пока операция ожидает ответа Supabase, остальные защищённые маршруты возвращают `409` с кодом `account_deletion_pending`. После полного удаления ответ `204`, а старый JWT отклоняется на защищённых маршрутах. Для этого сервер сохраняет хеш UUID.
 
 **POST /auth/consents** — принимает `{ "consents": { "terms": "prototype-1", "personal_data": "prototype-1", "cross_border": "prototype-1" } }` и возвращает профиль. Сохраняет тип, версию, дату принятия, IP и User-Agent. Повторная отправка той же версии не дублирует согласия. Неполный или устаревший набор даёт `422`.
 
@@ -201,18 +209,21 @@ startup-group-8/            (ветка main)
 Для категорий сравниваются два отрезка по 30 завершённых календарных дней. Нужны чеки минимум за три разных дня в каждом отрезке с охватом не менее 14 дней. Прогноз требует истории прошлого месяца и минимум 10 полных дней текущего месяца. Его точность зависит от того, насколько регулярно добавляются чеки.
 
 ### Этап 3 — Профиль
-- [ ] Аватар с инициалами, имя, email, «С нами с <дата>».
-- [ ] Реальная статистика: всего чеков, всего потрачено, любимая категория (добавить эндпоинт `GET /me/summary`, если нужно). **Не показывать «Сэкономлено»** — таких данных нет.
-- [ ] Редактирование имени, смена пароля.
-- [ ] Ссылки: Политика конфиденциальности, Пользовательское соглашение, О проекте (команда, курс).
-- [ ] «Скачать мои данные» (JSON-экспорт) и «Удалить аккаунт» (с подтверждением, каскадно удаляет чеки и позиции).
-- [ ] Кнопка установки PWA (`beforeinstallprompt`, уже есть) + подсказка для iOS («Поделиться → На экран Домой»).
-- [x] Выход реализован в Этапе 2.
+- [x] Аватар с инициалами, имя, email, месяц регистрации.
+- [x] Серверная статистика за всё время: количество чеков и товарных позиций, общая сумма расходов, категория с наибольшей суммой и пустое состояние нового профиля.
+- [x] Редактирование имени с обновлением интерфейса и смена пароля через Supabase Auth с проверкой текущего пароля.
+- [x] «О проекте», версия приложения, политика конфиденциальности, пользовательское соглашение и два согласия. Все юридические документы помечены как предварительные.
+- [x] Скачивание JSON с данными владельца и удаление аккаунта с подтверждением, повторной аутентификацией и восстановлением операции после сбоя.
+- [x] Установка PWA через `beforeinstallprompt`, состояние установленного приложения и инструкция в Safari на iOS.
+- [x] Выход из Supabase Auth и очистка пользовательских данных и старых кэшей приложения на устройстве.
+- [x] Автотесты бэкенда, сборка, линтер, сценарии профиля на 375 px в Chromium и WebKit с эмуляцией iPhone. Смена пароля и удаление проверены на отдельных аккаунтах в локальном Supabase. События установки Chromium имитировались. Нативная установка на физический iPhone, удаление в облачном Supabase и живой вызов OpenAI в рамках этого этапа не проверялись.
 
 ### Этап 4 — Деплой
 FastAPI будет размещён на Render и подключён к уже подготовленному PostgreSQL через Session pooler (порт 5432) с проверкой TLS. PWA будет размещена на GitHub Pages и будет обращаться к Supabase Auth и FastAPI.
 - [ ] Настроить переменные окружения Render, включая путь к CA, и проверить запуск приложения.
 - [ ] Ограничить CORS адресами опубликованной PWA и локальной разработки.
+
+**Подготовка Render.** Web Service с Root Directory `checkmudrets-api`, Python 3.13, Build Command `pip install -r requirements.txt`, Start Command `uvicorn main:app --host 0.0.0.0 --port $PORT`, Health Check Path `/health`. Указать `OPENAI_API_KEY`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` и `CORS_ORIGINS=https://unica12.github.io`. При необходимости добавить локальные источники через запятую и задать `OPENAI_MODEL`. Загрузить CA Supabase как Secret File `supabase-ca.crt`, указать `SUPABASE_DB_CA_FILE=/etc/secrets/supabase-ca.crt`. Для MVP запустить один воркер Uvicorn, чтобы при удалении очищался весь кэш аналитики процесса. Запуск с установкой зависимостей и `/health` проверен в чистом Linux-контейнере с Python 3.13. [FastAPI на Render](https://render.com/docs/deploy-fastapi) · [Переменные и файлы Render](https://render.com/docs/configure-environment-variables)
 
 Риски, о которых надо помнить:
 - Free-tier Supabase засыпает после недели без активности → нужен keep-alive (GitHub Actions cron раз в несколько дней пингует БД/эндпоинт).
@@ -221,9 +232,9 @@ FastAPI будет размещён на Render и подключён к уже 
 
 **Фронт → GitHub Pages.** Сейчас Pages этого репо уже отдаёт лендинг из ветки `week14` (`/docs`) по адресу `/startup-group-8/`. PWA кладём рядом, не ломая лендинг:
 - [ ] PWA по адресу `https://unica12.github.io/startup-group-8/app/`.
-- [ ] `vite.config.js`: `base: '/startup-group-8/app/'`; в manifest `start_url` и `scope` → `'/startup-group-8/app/'`; пути к иконкам без ведущего `/` (или с base).
-- [ ] GitHub Actions workflow (`.github/workflows/deploy.yml`): собирает PWA, берёт `docs/` лендинга из `week14`, кладёт PWA `dist/` в `app/`, публикует через `actions/deploy-pages`. Источник Pages в настройках репо переключить на «GitHub Actions» (это делает пользователь вручную).
-- [ ] `VITE_API_URL` — через GitHub Secrets/Variables в workflow.
+- [ ] `vite.config.js`: установить `base: '/startup-group-8/app/'`, согласовать `start_url`, scope манифеста и Service Worker, пути к иконкам и статике. Сейчас PWA собирается для корневого пути.
+- [ ] GitHub Actions workflow (`.github/workflows/deploy.yml`) собирает PWA, берёт `docs/` лендинга из `week14`, кладёт PWA `dist/` в `app/` и публикует общий артефакт. Источник Pages в настройках репозитория переключает пользователь после проверки workflow. [GitHub Pages и Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
+- [ ] Передать в workflow публичные `VITE_API_URL` с HTTPS-адресом Render, `VITE_SUPABASE_URL` и `VITE_SUPABASE_PUBLISHABLE_KEY`. Добавить точный URL PWA в Redirect URLs Supabase Auth и проверить вход по ссылке, распознавание, экспорт, удаление выделенного тестового аккаунта и установку с опубликованного адреса.
 - [ ] На лендинге кнопки «Хочу попробовать» можно направить на `/app/` (согласовать с пользователем, правка в ветке `week14`).
 
 ### Этап 5 — 152-ФЗ «О персональных данных» (Роскомнадзор)
@@ -232,7 +243,7 @@ FastAPI будет размещён на Render и подключён к уже 
 - [ ] **Пользовательское соглашение.**
 - [ ] **Согласие на обработку ПД — отдельным документом и отдельным чекбоксом** (с 01.09.2025 согласие нельзя прятать внутрь политики/соглашения). Отдельный чекбокс — согласие на трансграничную передачу (OpenAI).
 - [x] Таблица `consents` и фиксация принятия предварительных документов реализованы в Этапе 2.
-- [ ] Отзыв согласия = удаление аккаунта и всех данных (из Этапа 3); экспорт данных.
+- [x] Экспорт и удаление собственного аккаунта и связанных данных реализованы в Этапе 3. Ключ Admin API нужно задать в окружении каждого сервера.
 - [ ] Фото чеков не хранить после распознавания (сейчас хранится только `raw_text` — проверить и указать в политике).
 - [ ] Если в PWA будет аналитика (Яндекс.Метрика, как на лендинге) — cookie-баннер и упоминание в политике.
 - [ ] Честно указать в политике/README: формально 152-ФЗ требует хранить ПД граждан РФ первично в РФ (ст. 18 ч. 5), а также уведомлять РКН о трансграничной передаче. Для учебного проекта это отмечаем как известное ограничение; для продакшна нужен российский хостинг БД + уведомление РКН (как сделано для МусорВон).
@@ -243,8 +254,9 @@ FastAPI будет размещён на Render и подключён к уже 
 - ✅ Backend подключён к Supabase PostgreSQL. SQLite используется в автоматизированных тестах.
 - ✅ PWA: редизайн 5 экранов завершён, `npm run build` и `npm run lint` проходят. Навигация, загрузка, ошибки, пустые состояния и офлайн-запуск оболочки проверены в Chromium на 375 px.
 - ✅ Вход, регистрация и согласия реализованы и проверены в Chromium с локальными Supabase Auth, Mailpit и PostgreSQL. Для OCR и советов в этой проверке подставлялись ответы OpenAI. Реальное распознавание было проверено командой на Этапе 1.
+- ✅ Профиль, статистика за всё время, экспорт, смена пароля, удаление и установка PWA реализованы. Облачная БД проверена с TLS. Для удаления в облачном проекте требуется серверный ключ Supabase.
 - ✅ Лендинг задеплоен на GitHub Pages (ветка `week14`).
-- ⏳ Управление аккаунтом, деплой PWA и API, окончательные документы — следующие этапы.
+- ⏳ Деплой PWA и API, окончательные документы — следующие этапы.
 
 ## Настройки Supabase Dashboard
 
@@ -253,6 +265,8 @@ FastAPI будет размещён на Render и подключён к уже 
 3. В **Authentication → Sign In / Providers** оставь включённым Allow new users to sign up. В разделе **Email** включи Email и Confirm Email. В **Authentication → URL Configuration** установи Site URL `http://localhost:5173/` для локальной демонстрации и добавь этот же точный адрес в Redirect URLs. Если открываешь PWA по `http://127.0.0.1:5173/`, добавь и этот адрес. Адрес GitHub Pages добавляется на Этапе 4. [Настройки Auth](https://supabase.com/docs/guides/auth/general-configuration)
 4. Для проверки письма в облачном проекте используй адрес участника команды проекта. Для демонстрации регистрации на сторонние адреса настрой **Authentication → SMTP Settings**. Встроенная отправка ограничена адресами участников команды. [Настройка SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
 5. Если проект используется только ЧекМудрецом, можно отключить весь Data API через **Integrations → Data API → Enable Data API**. Прикладные таблицы уже закрыты правами и RLS при запуске FastAPI. [Доступ к таблицам](https://supabase.com/docs/guides/api/securing-your-api)
+6. Для удаления аккаунтов создай отдельный ключ в **Project Settings → API Keys → Secret keys**. Добавь значение `sb_secret_…` как `SUPABASE_SECRET_KEY` в `checkmudrets-api/.env` и в окружение Render при развёртывании. Перезапусти API. Publishable key используется в PWA. [Ключи Supabase](https://supabase.com/docs/guides/getting-started/api-keys)
+7. Для дополнительной серверной проверки смены пароля в Email-настройках Auth можно включить **Require current password when changing password**. PWA уже повторно проверяет текущий пароль и передаёт его Supabase при смене. [Проверка пароля в Supabase](https://supabase.com/docs/guides/auth/password-security)
 
 ## Команды
 Выполни команды в двух терминалах из корня репозитория. Для фронтенда нужен Node.js 22.12+.
@@ -263,7 +277,7 @@ cd checkmudrets-api
 uv venv --python 3.13 .venv
 uv pip install --python .venv/bin/python -r requirements.txt
 test -f .env || cp .env.example .env
-# Заполни OPENAI_API_KEY, DATABASE_URL и путь к CA в .env.
+# Заполни OPENAI_API_KEY, DATABASE_URL и путь к CA в .env. Для удаления задай SUPABASE_SECRET_KEY.
 .venv/bin/python -m uvicorn main:app --reload   # http://localhost:8000/docs
 ```
 
@@ -278,7 +292,9 @@ npm run build
 npm run lint
 ```
 
-Автотесты FastAPI создают временную SQLite и локальный JWKS. Они проверяют JWT и ротацию ключей, согласия, проверку OCR и повтор, подтверждение, отсутствие дубликатов, разделение данных аккаунтов и расчёт инсайтов. Внешние ответы OpenAI подменяются в автотестах.
+Для локальной проверки собранной PWA используй `npm run build -- --mode development` и `npm run preview` с локальными настройками. Обычная сборка `npm run build` включает адрес API только при заданном публичном HTTPS URL. Без него PWA показывает сообщение о настройке подключения.
+
+Автотесты FastAPI создают временную SQLite и локальный JWKS. Они проверяют JWT и ротацию ключей, согласия, профиль, статистику за всё время, экспорт и изоляцию его данных, повтор удаления после сбоя, проверку OCR и повтор, подтверждение, отсутствие дубликатов и расчёт инсайтов. Внешние ответы OpenAI подменяются в автотестах.
 
 ```bash
 cd checkmudrets-api

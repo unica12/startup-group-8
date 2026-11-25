@@ -5,6 +5,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
+from time import time
 from threading import Thread
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
@@ -50,6 +51,7 @@ class AuthTests(unittest.TestCase):
         cls.enterClassContext(patch.dict(os.environ, {
             "DATABASE_URL": f"sqlite+aiosqlite:///{folder}/test.db", "SUPABASE_URL": url,
             "OPENAI_API_KEY": "test-only", "PYTHON_DOTENV_DISABLED": "1",
+            "SUPABASE_SECRET_KEY": "sb_secret_test-only",
         }))
         from main import app
         from services.auth import REQUIRED_CONSENTS
@@ -220,3 +222,129 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(self.client.get("/stats", headers=headers).json()["receipts_count"], 0)
         old_month = self.client.get("/stats", headers=headers, params={"month": previous.strftime("%Y-%m")}).json()
         self.assertEqual(old_month["total_spent"], 30)
+
+    def seed_profile_receipts(self, owner, name, *, count=1):
+        from database.db import AsyncSessionFactory
+        from database.models import Item, Receipt, ReceiptDraft
+
+        draft_id = uuid4()
+
+        async def seed():
+            async with AsyncSessionFactory() as session:
+                session.add(ReceiptDraft(id=draft_id, user_id=owner))
+                await session.flush()
+                for index in range(count):
+                    total = .1 if index % 2 == 0 else .2
+                    session.add(Receipt(user_id=owner, draft_id=draft_id if index == 0 else None,
+                                        date=date(2021, 1, 1), store_name=name, total=total, items=[
+                        Item(name=f"{name} SKU", quantity=2, total=total / 2, category="Кофе"),
+                        Item(name=f"{name} скидка", total=total / 2, category="  "),
+                    ]))
+                await session.commit()
+
+        self.client.portal.call(seed)
+        return draft_id
+
+    def test_profile_name_is_normalized_and_stays_authoritative_after_sign_in(self):
+        user_id = uuid4()
+        headers = self.auth(user_id, user_metadata={"name": "При регистрации"})
+        profile = self.accept(headers).json()
+        self.assertEqual(profile["name"], "При регистрации")
+        for invalid in ("    ", "x" * 51, "\u200b"):
+            self.assertEqual(self.client.patch("/auth/me", headers=headers, json={"name": invalid}).status_code, 422)
+        changed = self.client.patch("/auth/me", headers=headers, json={"name": "  Иван   Петров "})
+        self.assertEqual(changed.status_code, 200)
+        self.assertEqual(changed.json()["name"], "Иван Петров")
+        stale = self.auth(user_id, user_metadata={"name": "Устаревшее имя"})
+        self.assertEqual(self.client.get("/auth/me", headers=stale).json()["name"], "Иван Петров")
+        self.assertEqual(self.client.get("/auth/me", headers=stale).json()["created_at"], profile["created_at"])
+
+    def test_all_time_stats_and_full_export_are_scoped_to_current_user(self):
+        first, other = self.auth(), self.auth(email="other@example.test")
+        owner = self.accept(first).json()
+        stranger = self.accept(other).json()
+        for path in ("/auth/me/stats", "/auth/me/export"):
+            self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(self.client.get("/auth/me/stats", headers=first).json(), {
+            "receipts_count": 0, "total_spent": "0.00", "items_count": 0, "top_category": None,
+        })
+        self.seed_profile_receipts(owner["id"], "Магазин пользователя", count=103)
+        self.seed_profile_receipts(stranger["id"], "Чужой магазин")
+        result = self.client.get("/auth/me/stats", headers=first, params={"user_id": stranger["id"]})
+        self.assertEqual(result.json(), {
+            "receipts_count": 103, "total_spent": "15.40", "items_count": 206, "top_category": "Кофе",
+        })
+
+        response = self.client.get("/auth/me/export", headers=first, params={"user_id": stranger["id"]})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        self.assertIn('attachment; filename="checkmudrets-export-', response.headers["content-disposition"])
+        exported = response.json()
+        self.assertEqual(exported["profile"]["id"], owner["id"])
+        self.assertEqual(exported["profile"]["created_at"], owner["created_at"])
+        self.assertTrue(exported["exported_at"])
+        self.assertEqual(len(exported["receipts"]), 103)
+        self.assertEqual(len(exported["receipts"][0]["items"]), 2)
+        self.assertEqual(len(exported["consents"]), 3)
+        self.assertNotIn("Чужой магазин", response.text)
+        self.assertNotIn("other@example.test", response.text)
+        self.assertFalse({"access_token", "refresh_token", "password", "DATABASE_URL"} & exported["profile"].keys())
+
+    def test_deletion_reauth_idempotency_and_related_rows(self):
+        from sqlalchemy import func, select
+        from database.accounts import account_fingerprint
+        from database.db import AsyncSessionFactory
+        from database.models import AccountDeletion, Consent, Item, Receipt, ReceiptDraft, User
+        from services.advisor import _cached
+
+        identity = uuid4()
+        fresh = self.auth(identity, amr=[{"method": "password", "timestamp": int(time())}])
+        stale = self.auth(identity, amr=[{"method": "password", "timestamp": int(time()) - 600}])
+        owner = self.accept(fresh).json()["id"]
+        stranger = self.auth()
+        other_id = self.accept(stranger).json()["id"]
+        self.seed_profile_receipts(owner, "Удаляемый тест")
+        self.seed_profile_receipts(other_id, "Остающийся тест")
+        _cached[owner] = ("test", [])
+
+        self.assertEqual(self.client.delete("/auth/me", headers=stale).status_code, 403)
+        self.assertEqual(self.client.get("/auth/me/stats", headers=fresh).json()["receipts_count"], 1)
+        with patch("services.account_deletion.delete_auth_user", AsyncMock()) as admin:
+            with ThreadPoolExecutor(max_workers=2) as threads:
+                outcomes = list(threads.map(lambda _: self.client.delete("/auth/me", headers=fresh).status_code, range(2)))
+            self.assertEqual(outcomes, [204, 204])
+            self.assertEqual(self.client.delete("/auth/me", headers=fresh).status_code, 204)
+            admin.assert_awaited_once_with(identity)
+
+        for path in ("/auth/me", "/auth/me/stats", "/auth/me/export", "/receipts", "/advice"):
+            self.assertEqual(self.client.get(path, headers=fresh).status_code, 401)
+        self.assertNotIn(owner, _cached)
+        self.assertEqual(self.client.get("/auth/me/stats", headers=stranger).json()["receipts_count"], 1)
+
+        async def verify_removal():
+            async with AsyncSessionFactory() as session:
+                self.assertIsNone(await session.get(User, owner))
+                for model in (Consent, Receipt, ReceiptDraft):
+                    self.assertEqual(await session.scalar(select(func.count()).select_from(model).where(model.user_id == owner)), 0)
+                self.assertEqual(await session.scalar(select(func.count(Item.id)).where(Item.name.like("Удаляемый тест%"))), 0)
+                self.assertIsNone((await session.get(AccountDeletion, account_fingerprint(identity))).auth_user_id)
+
+        self.client.portal.call(verify_removal)
+
+    def test_deletion_can_resume_after_admin_failure(self):
+        from services.account_deletion import AuthDeletionUnavailable
+
+        identity = uuid4()
+        fresh = self.auth(identity, amr=[{"method": "password", "timestamp": int(time())}])
+        owner = self.accept(fresh).json()["id"]
+        self.seed_profile_receipts(owner, "Временный сбой")
+        admin = AsyncMock(side_effect=[AuthDeletionUnavailable(), None])
+        with patch("services.account_deletion.delete_auth_user", admin):
+            partial = self.client.delete("/auth/me", headers=fresh)
+            self.assertEqual(partial.status_code, 503)
+            self.assertEqual(partial.json()["detail"]["code"], "account_deletion_pending")
+            self.assertEqual(self.client.get("/auth/me", headers=fresh).status_code, 409)
+            self.assertEqual(self.client.get("/receipts", headers=fresh).status_code, 409)
+            self.assertEqual(self.client.delete("/auth/me", headers=self.auth(identity)).status_code, 204)
+            self.assertEqual(admin.await_count, 2)
+        self.assertEqual(self.client.get("/auth/me", headers=fresh).status_code, 401)

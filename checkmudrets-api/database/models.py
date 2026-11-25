@@ -26,6 +26,14 @@ class User(Base):
     receipts = relationship("Receipt", back_populates="user")
 
 
+class AccountDeletion(Base):
+    __tablename__ = "account_deletions"
+
+    # После завершения остаётся только хеш UUID для блокировки ранее выданных JWT.
+    id = Column(String(64), primary_key=True)
+    auth_user_id = Column(Uuid, nullable=True)
+
+
 class Consent(Base):
     __tablename__ = "consents"
     __table_args__ = (UniqueConstraint("user_id", "consent_type", "document_version"),)

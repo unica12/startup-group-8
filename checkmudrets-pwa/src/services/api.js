@@ -1,6 +1,7 @@
 import { supabase } from './supabase';
 
-const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:8000').replace(/\/+$/, '');
+const API_BASE = import.meta.env.VITE_API_URL.replace(/\/+$/, '');
+export const apiConfigured = Boolean(API_BASE);
 
 async function getSession(expectedUser) {
   const { data, error } = await supabase.auth.getSession();
@@ -12,6 +13,7 @@ async function getSession(expectedUser) {
 }
 
 async function request(path, options = {}, session) {
+  if (!apiConfigured) throw new Error('Настрой адрес API.');
   const current = session ?? await getSession();
   const headers = new Headers(options.headers);
   headers.set('Authorization', `Bearer ${current.access_token}`);
@@ -28,11 +30,29 @@ async function request(path, options = {}, session) {
     error.detail = (await response.json().catch(() => null))?.detail;
     throw error;
   }
-  return response.json();
+  return response.status === 204 ? null : response.json();
 }
 
 export async function getMe(userId, signal) {
   return request('/auth/me', { signal }, await getSession(userId));
+}
+
+export async function updateProfile(userId, name) {
+  return request('/auth/me', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }),
+  }, await getSession(userId));
+}
+
+export async function getProfileStats(userId, signal) {
+  return request('/auth/me/stats', { signal }, await getSession(userId));
+}
+
+export async function exportProfile(userId, signal) {
+  return request('/auth/me/export', { signal }, await getSession(userId));
+}
+
+export async function deleteProfile(userId) {
+  return request('/auth/me', { method: 'DELETE' }, await getSession(userId));
 }
 
 export async function recordConsents(userId, consents, signal) {

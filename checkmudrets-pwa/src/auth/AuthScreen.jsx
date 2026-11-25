@@ -125,7 +125,7 @@ export default function AuthScreen() {
 
   return (
     <AuthLayout title={registering ? 'Регистрация' : 'Вход'} intro={registering ? 'Создай аккаунт для учёта расходов.' : 'Войди, чтобы увидеть чеки и расходы.'}>
-      {!auth.configured && <ErrorState message="Для входа нужно настроить подключение к Supabase." />}
+      {!auth.configured && <ErrorState message="Для входа нужно настроить адрес API и Supabase." />}
       <form noValidate className="flex flex-col gap-3" onSubmit={submit}>
         {registering && <Input label="Имя" autoComplete="given-name" required maxLength={50} value={name} onChange={editField('name', setName)} error={errors.name} readOnly={busy} />}
         <Input label="Электронная почта" type="email" autoComplete="email" required maxLength={254} value={email} onChange={editField('email', setEmail)} error={errors.email} readOnly={busy} />

@@ -39,19 +39,32 @@ const config = {
   },
 }
 
-export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), 'VITE_SUPABASE_')
+function isLoopback(hostname) {
+  const name = hostname.replace(/\.$/, '')
+  return ['localhost', '[::1]', '0.0.0.0'].includes(name) || name.startsWith('127.')
+}
+
+export default defineConfig(({ mode, command }) => {
+  const env = loadEnv(mode, process.cwd(), 'VITE_')
+  const publicBuild = command === 'build' && mode === 'production'
   const key = env.VITE_SUPABASE_PUBLISHABLE_KEY
   if (key && !/^sb_publishable_[\w-]+$/.test(key)) {
     throw new Error('VITE_SUPABASE_PUBLISHABLE_KEY должен содержать только publishable key Supabase.')
   }
-  const configuredUrl = env.VITE_SUPABASE_URL
+  let configuredUrl = env.VITE_SUPABASE_URL || ''
   if (configuredUrl) {
     const url = URL.parse(configuredUrl)
-    const local = url?.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
-    if (!url || (url.protocol !== 'https:' && !local) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    const local = url && isLoopback(url.hostname)
+    if (!url || (url.protocol !== 'https:' && !(url.protocol === 'http:' && local)) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
       throw new Error('VITE_SUPABASE_URL должен содержать только базовый URL проекта.')
     }
+    if (publicBuild && local) configuredUrl = ''
   }
-  return config
+  const api = URL.parse(env.VITE_API_URL || (publicBuild ? '' : 'http://localhost:8000'))
+  const valid = api && ['http:', 'https:'].includes(api.protocol) && !api.username && !api.password && !api.search && !api.hash
+    && (!publicBuild || (api.protocol === 'https:' && !isLoopback(api.hostname)))
+  return { ...config, define: {
+    'import.meta.env.VITE_API_URL': JSON.stringify(valid ? api.href : ''),
+    'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(configuredUrl),
+  } }
 })

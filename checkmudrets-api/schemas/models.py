@@ -4,9 +4,10 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import List, Literal, Optional
+from unicodedata import category
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from schemas.receipt_input import ReceiptInput, ReceiptWarning
 
@@ -23,6 +24,26 @@ class UserResponse(BaseModel):
 
 class ConsentRequest(BaseModel):
     consents: dict[str, str] = Field(min_length=1, max_length=10)
+
+
+class ProfileUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=50)
+
+    @field_validator("name", mode="before")
+    @classmethod
+    def normalize_name(cls, value):
+        if isinstance(value, str):
+            value = " ".join(value.split())
+            if any(category(char).startswith("C") for char in value):
+                raise ValueError("Имя содержит недопустимые символы.")
+        return value
+
+
+class ProfileStats(BaseModel):
+    receipts_count: int
+    total_spent: Decimal
+    items_count: int
+    top_category: str | None
 
 
 # ─── Items / Receipts ─────────────────────────────────────────────────────────
@@ -69,6 +90,27 @@ class RecognizeReceiptResponse(BaseModel):
 class ReceiptsListResponse(BaseModel):
     receipts: List[ReceiptResponse]
     total_count: int
+
+
+class ExportConsent(BaseModel):
+    consent_type: str
+    document_version: str
+    accepted_at: datetime
+    ip_address: str | None
+    user_agent: str | None
+
+    model_config = {"from_attributes": True}
+
+
+class ExportReceipt(ReceiptResponse):
+    raw_text: str | None
+
+
+class AccountExport(BaseModel):
+    profile: UserResponse
+    receipts: list[ExportReceipt]
+    consents: list[ExportConsent]
+    exported_at: datetime
 
 
 # ─── Stats ────────────────────────────────────────────────────────────────────

@@ -1,16 +1,16 @@
 """Финансовые инсайты из подтверждённых чеков."""
 from datetime import date, datetime, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.db import get_session
 from database.models import User
 from database.queries import get_analysis_receipts
 from schemas.models import AdviceResponse
-from services.advisor import generate_advice
+from services.advisor import clear_advice_cache, generate_advice
 from services.analytics import EMPTY_MESSAGE, calculate_insights
-from services.auth import require_consents
+from services.auth import ensure_account_available, require_consents
 
 router = APIRouter(prefix="/advice", tags=["advice"])
 
@@ -27,6 +27,11 @@ async def get_advice(
     insights = calculate_insights(receipts, today)
     if personalize:
         insights = await generate_advice(user.id, insights)
+        try:
+            await ensure_account_available(session, user.auth_user_id)
+        except HTTPException:
+            clear_advice_cache(user.id)
+            raise
     return AdviceResponse(
         insights=insights, empty_message=None if insights else EMPTY_MESSAGE, generated_at=datetime.now(timezone.utc),
     )

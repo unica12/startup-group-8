@@ -11,7 +11,7 @@ from database.queries import get_analysis_receipts, get_confirmed_receipt, get_l
 from schemas.models import ReceiptResponse, ReceiptsListResponse, RecognizeReceiptResponse, SavedReceiptResponse
 from schemas.receipt_input import ConfirmReceipt
 from services.analytics import price_insights
-from services.auth import require_consents
+from services.auth import ensure_account_available, require_consents
 from services.ocr import MAX_IMAGE_BYTES, InvalidImage, recognize_receipt
 from services.receipt_validation import validate_receipt
 from utils.formatting import CATEGORY_EMOJI
@@ -47,6 +47,7 @@ async def recognize(
     if receipt is None:
         return RecognizeReceiptResponse(success=False, error="Чек не читается. Попробуй сделать новое фото.")
 
+    await ensure_account_available(session, user.auth_user_id)
     draft_id = uuid4()
     session.add(ReceiptDraft(id=draft_id, user_id=user.id))
     await session.commit()
