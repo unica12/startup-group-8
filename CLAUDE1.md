@@ -41,7 +41,7 @@ startup-group-8/            (ветка main)
 - `src/services/supabase.js` использует `VITE_SUPABASE_URL` и `VITE_SUPABASE_PUBLISHABLE_KEY`. `src/services/api.js` передаёт Bearer-токен на `VITE_API_URL`. Service worker кэширует файлы приложения, защищённые ответы загружаются с сервера.
 - Шрифт Manrope и токены палитры лендинга — в `src/index.css` через `@theme` (Tailwind v4).
 - Иконки интерфейса — `lucide-react`. PWA-иконки с маскотом — `public/icons/`.
-- `vercel.json` — остаток от старого плана, можно удалить.
+- Локальная разработка запускается с корневого пути. Production-сборка, манифест и Service Worker используют `/startup-group-8/app/`.
 
 ### Backend (`checkmudrets-api/`)
 - `main.py` — FastAPI, список разрешённых источников CORS из `CORS_ORIGINS`, роутеры auth/receipts/stats/advice/report, `/health`.
@@ -219,23 +219,60 @@ startup-group-8/            (ветка main)
 - [x] Автотесты бэкенда, сборка, линтер, сценарии профиля на 375 px в Chromium и WebKit с эмуляцией iPhone. Смена пароля и удаление проверены на отдельных аккаунтах в локальном Supabase. События установки Chromium имитировались. Нативная установка на физический iPhone, удаление в облачном Supabase и живой вызов OpenAI в рамках этого этапа не проверялись.
 
 ### Этап 4 — Деплой
-FastAPI будет размещён на Render и подключён к уже подготовленному PostgreSQL через Session pooler (порт 5432) с проверкой TLS. PWA будет размещена на GitHub Pages и будет обращаться к Supabase Auth и FastAPI.
-- [ ] Настроить переменные окружения Render, включая путь к CA, и проверить запуск приложения.
-- [ ] Ограничить CORS адресами опубликованной PWA и локальной разработки.
 
-**Подготовка Render.** Web Service с Root Directory `checkmudrets-api`, Python 3.13, Build Command `pip install -r requirements.txt`, Start Command `uvicorn main:app --host 0.0.0.0 --port $PORT`, Health Check Path `/health`. Указать `OPENAI_API_KEY`, `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SECRET_KEY` и `CORS_ORIGINS=https://unica12.github.io`. При необходимости добавить локальные источники через запятую и задать `OPENAI_MODEL`. Загрузить CA Supabase как Secret File `supabase-ca.crt`, указать `SUPABASE_DB_CA_FILE=/etc/secrets/supabase-ca.crt`. Для MVP запустить один воркер Uvicorn, чтобы при удалении очищался весь кэш аналитики процесса. Запуск с установкой зависимостей и `/health` проверен в чистом Linux-контейнере с Python 3.13. [FastAPI на Render](https://render.com/docs/deploy-fastapi) · [Переменные и файлы Render](https://render.com/docs/configure-environment-variables)
+- [x] Проверены отслеживаемые файлы, история доступных веток и локальные коммиты перед публикацией. Корневой `.gitignore` закрывает локальные варианты `.env`, ключи, сертификаты и базы.
+- [x] FastAPI запускается в чистом Linux с Python 3.13 и PostgreSQL с TLS. Проверены автоматическая подготовка схемы, `/health` и CORS для `http://localhost:5173` и `https://unica12.github.io`. На Render запуск с SQLite или CORS `*` отклоняется.
+- [x] Production-сборка использует `/startup-group-8/app/` для статики, манифеста, Service Worker и возврата из Supabase Auth. Локальный dev-сервер работает на `http://localhost:5173/`.
+- [x] Подготовлен `.github/workflows/deploy.yml`. Он берёт `week14:docs` в корень артефакта, кладёт PWA в `app/` и публикует общий артефакт GitHub Pages. Локальная сборка артефакта сохранила все пять файлов лендинга побайтно.
+- [ ] Добавить серверное окружение и развернуть API на Render.
+- [ ] Настроить Site URL и Redirect URLs в Supabase, переменные Actions и источник публикации GitHub Pages.
+- [ ] Проверить публичные URL и сквозные сценарии регистрации, OCR, экспорта, удаления тестового аккаунта и установки PWA.
 
-Риски, о которых надо помнить:
-- Free-tier Supabase засыпает после недели без активности → нужен keep-alive (GitHub Actions cron раз в несколько дней пингует БД/эндпоинт).
-- Free-tier Render засыпает → первый запрос ~30–50 сек. Перед защитой «разбудить».
-- Проверить доступность Supabase Auth, FastAPI и распознавания на устройстве, которое будет использоваться на защите.
+Локально прошли 22 теста API, `npm ci`, линтер, production-сборка и проверка workflow через actionlint. В Chromium на 375 px проверены ресурсы, границы Service Worker, отсутствие приватных ответов в кэше, подтверждение email через локальные Supabase и Mailpit и восстановление сессии при обновлении страницы. Подключение к облачному Session pooler проверено с TLS в транзакции только для чтения. В Linux две последовательные миграции локальной схемы до Supabase сохранили тестовый чек и его позицию. `npm audit --omit=dev` не выявил уязвимостей в зависимостях приложения. Полный аудит npm сообщил о четырёх предупреждениях средней серьёзности в цепочке сборки PWA.
 
-**Фронт → GitHub Pages.** Сейчас Pages этого репо уже отдаёт лендинг из ветки `week14` (`/docs`) по адресу `/startup-group-8/`. PWA кладём рядом, не ломая лендинг:
-- [ ] PWA по адресу `https://unica12.github.io/startup-group-8/app/`.
-- [ ] `vite.config.js`: установить `base: '/startup-group-8/app/'`, согласовать `start_url`, scope манифеста и Service Worker, пути к иконкам и статике. Сейчас PWA собирается для корневого пути.
-- [ ] GitHub Actions workflow (`.github/workflows/deploy.yml`) собирает PWA, берёт `docs/` лендинга из `week14`, кладёт PWA `dist/` в `app/` и публикует общий артефакт. Источник Pages в настройках репозитория переключает пользователь после проверки workflow. [GitHub Pages и Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
-- [ ] Передать в workflow публичные `VITE_API_URL` с HTTPS-адресом Render, `VITE_SUPABASE_URL` и `VITE_SUPABASE_PUBLISHABLE_KEY`. Добавить точный URL PWA в Redirect URLs Supabase Auth и проверить вход по ссылке, распознавание, экспорт, удаление выделенного тестового аккаунта и установку с опубликованного адреса.
-- [ ] На лендинге кнопки «Хочу попробовать» можно направить на `/app/` (согласовать с пользователем, правка в ветке `week14`).
+Публичный лендинг совпадает с `origin/week14:docs/index.html`. URL приложения пока возвращает `404`. В отдельной исторической ветке `origin/неделя3` найдены три скриншота с отдельными визитами на лендинг, без видимых имён, email и IP. Коммит `cbc5233` отсутствует в истории `main`, а отчёты этой ветки отсутствуют в артефакте Pages.
+
+#### Порядок публикации
+
+1. После разрешения владельца отправить проверенные коммиты в `main`. Первый запуск workflow может завершиться сообщением о недостающих переменных Pages. До переключения источника публикации лендинг продолжает обслуживаться из `week14:/docs`.
+2. Развернуть FastAPI по инструкции ниже и получить публичный HTTPS URL после проверки `/health`.
+3. Добавить публичный URL PWA в конфигурацию Supabase Auth и три публичные переменные в GitHub. Переключить источник Pages и вручную запустить workflow для `main`.
+4. Открыть `https://unica12.github.io/startup-group-8/` и `https://unica12.github.io/startup-group-8/app/`. Проверить статику, установку, обновление страницы, подтверждение email, распознавание синтетического чека, экспорт и удаление отдельного тестового аккаунта. У бесплатного Render возможен холодный старт. Перед демонстрацией проверить доступность API и Supabase на устройстве, которое будет использоваться.
+
+#### Render Web Service
+
+1. В Render Dashboard выбрать **New → Web Service**, подключить GitHub и выбрать `unica12/startup-group-8`, ветку `main`. Выбрать **Python 3**, доступный **Free** instance и регион рядом с Supabase, например Frankfurt при доступности. [FastAPI на Render](https://render.com/docs/deploy-fastapi) · [План Free](https://render.com/docs/free)
+2. Задать **Root Directory** `checkmudrets-api`, **Build Command** `pip install -r requirements.txt`, **Start Command** `uvicorn main:app --host 0.0.0.0 --port $PORT` и **Health Check Path** `/health`. [Порт Render](https://render.com/docs/web-services#port-binding)
+3. Заполнить переменные из таблицы в **Environment**. Скачать сертификат в **Supabase → Database → Settings → SSL Configuration** и добавить его в Render **Secret Files** под именем `supabase-ca.crt`. [Переменные и файлы Render](https://render.com/docs/configure-environment-variables)
+4. Нажать **Create Web Service**. После успешного запуска открыть HTTPS URL сервиса с суффиксом `/health`. Ответ должен быть `{"status":"healthy"}`. Проверить, что `GET /auth/me` без токена даёт `401`.
+
+| Переменная Render | Значение |
+| --- | --- |
+| `PYTHON_VERSION` | `3.13.18`, версия локальной проверки в Linux. [Версии Python на Render](https://render.com/docs/python-version) |
+| `WEB_CONCURRENCY` | `1`, чтобы кэш аналитики находился в одном воркере |
+| `OPENAI_API_KEY` | Существующий ключ сервера для OCR и советов |
+| `DATABASE_URL` | Supabase **Connect → Session pooler**, порт `5432`. Пароль в URI должен быть URL-кодирован |
+| `SUPABASE_URL` | Project URL того же Supabase, без `/auth/v1` |
+| `SUPABASE_DB_CA_FILE` | `/etc/secrets/supabase-ca.crt` |
+| `SUPABASE_SECRET_KEY` | Серверный ключ Supabase `sb_secret_…` для удаления аккаунтов |
+| `CORS_ORIGINS` | `http://localhost:5173,https://unica12.github.io` |
+| `OPENAI_MODEL` | Необязательная переменная, по умолчанию `gpt-4o-mini` |
+
+Render задаёт `PORT` автоматически. Для текущего JWKS с ES256 переменная `SUPABASE_JWT_SECRET` не нужна. Подключение к Session pooler использует проверку сертификата и имени хоста, пул из трёх соединений и до двух дополнительных соединений. При старте миграция выполняется в транзакции с блокировкой, при остановке пул закрывается.
+
+#### GitHub Pages и Actions
+
+1. В репозитории открыть **Settings → Secrets and variables → Actions → Variables → New repository variable** и создать три публичные переменные. Ключи серверов и `DATABASE_URL` хранятся в Render. [Переменные GitHub Actions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables)
+
+   | Переменная GitHub | Значение |
+   | --- | --- |
+   | `VITE_API_URL` | Публичный HTTPS URL Render |
+   | `VITE_SUPABASE_URL` | Project URL Supabase |
+   | `VITE_SUPABASE_PUBLISHABLE_KEY` | Публичный ключ проекта `sb_publishable_…` |
+
+2. Открыть **Settings → Pages → Build and deployment → Source → GitHub Actions**. Если окружение **github-pages** ограничено веткой `week14`, открыть **Settings → Environments → github-pages → Deployment branches and tags** и разрешить `main`. [GitHub Pages и Actions](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)
+3. Открыть **Actions → Deploy GitHub Pages → Run workflow**, выбрать `main` и дождаться успешных jobs `build` и `deploy`. Следующие push в `main` запустят тот же workflow. Сборка требует все три переменные и отклоняет loopback-адреса, а Service Worker работает внутри `/startup-group-8/app/`.
+4. При необходимости вернуть предыдущий источник Pages через **Deploy from a branch → week14 → /docs**. Публикация ветки снова обслужит существующий лендинг.
 
 ### Этап 5 — 152-ФЗ «О персональных данных» (Роскомнадзор)
 Делаем по аналогии с проектом МусорВон. Это учебный проект — тексты-шаблоны, но структурно корректные.
@@ -256,13 +293,14 @@ FastAPI будет размещён на Render и подключён к уже 
 - ✅ Вход, регистрация и согласия реализованы и проверены в Chromium с локальными Supabase Auth, Mailpit и PostgreSQL. Для OCR и советов в этой проверке подставлялись ответы OpenAI. Реальное распознавание было проверено командой на Этапе 1.
 - ✅ Профиль, статистика за всё время, экспорт, смена пароля, удаление и установка PWA реализованы. Облачная БД проверена с TLS. Для удаления в облачном проекте требуется серверный ключ Supabase.
 - ✅ Лендинг задеплоен на GitHub Pages (ветка `week14`).
-- ⏳ Деплой PWA и API, окончательные документы — следующие этапы.
+- ✅ Конфигурация PWA и workflow Pages подготовлены и проверены локально. Облачные настройки и публикация ожидают ручного запуска.
+- ⏳ Публичная проверка PWA и API, окончательные документы.
 
 ## Настройки Supabase Dashboard
 
 1. В проекте `checkmudrets` открой **Connect** и скопируй Project URL. Добавь его в `checkmudrets-pwa/.env` как `VITE_SUPABASE_URL`. В **Project Settings → API Keys → Publishable key** возьми `sb_publishable_…` для `VITE_SUPABASE_PUBLISHABLE_KEY`. [API keys](https://supabase.com/docs/guides/getting-started/api-keys)
 2. В **Connect → Session pooler** скопируй строку подключения с портом `5432` в `checkmudrets-api/.env` как `DATABASE_URL`. Замени весь плейсхолдер пароля вместе со скобками. Специальные символы пароля в URI должны быть URL-кодированы. В **Database → Settings → SSL Configuration → Download certificate** скачай сертификат и укажи локальный путь в `SUPABASE_DB_CA_FILE`. [Postgres и SSL](https://supabase.com/docs/guides/database/connecting-to-postgres)
-3. В **Authentication → Sign In / Providers** оставь включённым Allow new users to sign up. В разделе **Email** включи Email и Confirm Email. В **Authentication → URL Configuration** установи Site URL `http://localhost:5173/` для локальной демонстрации и добавь этот же точный адрес в Redirect URLs. Если открываешь PWA по `http://127.0.0.1:5173/`, добавь и этот адрес. Адрес GitHub Pages добавляется на Этапе 4. [Настройки Auth](https://supabase.com/docs/guides/auth/general-configuration)
+3. В **Authentication → Sign In / Providers** оставь включённым Allow new users to sign up. В разделе **Email** включи Email и Confirm Email. Для публикации в **Authentication → URL Configuration** установи **Site URL** `https://unica12.github.io/startup-group-8/app/`. В **Redirect URLs** добавь этот же URL и `http://localhost:5173/` с завершающим слешем. Если открываешь PWA по `http://127.0.0.1:5173/`, добавь и этот точный адрес. Регистрация и повторная отправка используют базовый путь текущей сборки. [Redirect URLs в Supabase](https://supabase.com/docs/guides/auth/redirect-urls)
 4. Для проверки письма в облачном проекте используй адрес участника команды проекта. Для демонстрации регистрации на сторонние адреса настрой **Authentication → SMTP Settings**. Встроенная отправка ограничена адресами участников команды. [Настройка SMTP](https://supabase.com/docs/guides/auth/auth-smtp)
 5. Если проект используется только ЧекМудрецом, можно отключить весь Data API через **Integrations → Data API → Enable Data API**. Прикладные таблицы уже закрыты правами и RLS при запуске FastAPI. [Доступ к таблицам](https://supabase.com/docs/guides/api/securing-your-api)
 6. Для удаления аккаунтов создай отдельный ключ в **Project Settings → API Keys → Secret keys**. Добавь значение `sb_secret_…` как `SUPABASE_SECRET_KEY` в `checkmudrets-api/.env` и в окружение Render при развёртывании. Перезапусти API. Publishable key используется в PWA. [Ключи Supabase](https://supabase.com/docs/guides/getting-started/api-keys)
@@ -292,7 +330,7 @@ npm run build
 npm run lint
 ```
 
-Для локальной проверки собранной PWA используй `npm run build -- --mode development` и `npm run preview` с локальными настройками. Обычная сборка `npm run build` включает адрес API только при заданном публичном HTTPS URL. Без него PWA показывает сообщение о настройке подключения.
+Для локальной проверки с локальными настройками используй `npm run build -- --mode development` и `npm run preview -- --mode development`. Обычная сборка `npm run build` готовит файлы для GitHub Pages. С `npm run preview` она открывается по `http://localhost:4173/startup-group-8/app/`. Для подключения нужны публичные HTTPS URL API и Supabase и publishable key. При проверке облачного Auth через preview нужно добавить точный URL preview в Redirect URLs и его origin в CORS API.
 
 Автотесты FastAPI создают временную SQLite и локальный JWKS. Они проверяют JWT и ротацию ключей, согласия, профиль, статистику за всё время, экспорт и изоляцию его данных, повтор удаления после сбоя, проверку OCR и повтор, подтверждение, отсутствие дубликатов и расчёт инсайтов. Внешние ответы OpenAI подменяются в автотестах.
 

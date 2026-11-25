@@ -11,6 +11,8 @@ from sqlalchemy.exc import ArgumentError
 
 load_dotenv()
 
+ON_RENDER = os.getenv("RENDER") == "true"
+
 # API-ключ OpenAI
 OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
@@ -30,9 +32,12 @@ CORS_ORIGINS = [origin.strip().rstrip("/") for origin in os.getenv("CORS_ORIGINS
 
 def get_database_url():
     try:
-        return make_url(DATABASE_URL)
+        url = make_url(DATABASE_URL)
     except (ArgumentError, ValueError):
         raise RuntimeError("Проверь формат DATABASE_URL в настройках API.") from None
+    if ON_RENDER and url.get_backend_name() not in ("postgresql", "postgres"):
+        raise RuntimeError("На Render укажи PostgreSQL Session pooler в DATABASE_URL.")
+    return url
 
 
 def get_supabase_url() -> str:
@@ -68,6 +73,8 @@ PORT: int = int(os.getenv("PORT", "8000"))
 def validate_config() -> None:
     """Проверить что обязательные переменные заполнены."""
     get_supabase_url()
+    if ON_RENDER and "*" in CORS_ORIGINS:
+        raise ValueError("На Render перечисли точные источники в CORS_ORIGINS.")
     if SUPABASE_SECRET_KEY and not SUPABASE_SECRET_KEY.startswith("sb_secret_"):
         raise ValueError("SUPABASE_SECRET_KEY должен быть серверным ключом Supabase (sb_secret_…).")
     if not OPENAI_API_KEY:
