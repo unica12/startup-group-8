@@ -10,7 +10,7 @@ import ReceiptEditor from '../components/ReceiptEditor';
 import { editorPayload } from '../utils/receiptEditor';
 import { Button, Card } from '../components/ui';
 
-export default function Scan({ onNavigate, userId }) {
+export default function Scan({ onNavigate, userId, onReceiptsChanged }) {
   const [photo, setPhoto] = useState(null);
   const [previewError, setPreviewError] = useState(false);
   const [phase, setPhase] = useState(null);
@@ -77,6 +77,7 @@ export default function Scan({ onNavigate, userId }) {
     setError(null);
     try {
       const response = await confirmReceipt(draft.draft_id, editorPayload(draft.receipt), acceptedWarnings, userId);
+      onReceiptsChanged();
       setResult(response);
       setDraft(null);
       setPhoto(null);

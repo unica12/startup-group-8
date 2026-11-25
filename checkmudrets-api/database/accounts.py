@@ -1,13 +1,13 @@
 """Агрегаты, экспорт и состояние удаления аккаунта."""
 from datetime import timezone
-from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID
 
-from sqlalchemy import BigInteger, Numeric, cast, delete, func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database.models import AccountDeletion, Consent, Item, Receipt, ReceiptDraft, User
+from database.queries import amount_in_kopecks, get_receipt_totals
 
 
 def account_fingerprint(auth_user_id: UUID) -> str:
@@ -31,17 +31,15 @@ async def registration_date(session: AsyncSession, user: User):
 
 
 async def profile_totals(session: AsyncSession, user_id: int) -> dict:
-    receipt_amount = cast(func.round(cast(Receipt.total, Numeric) * 100), BigInteger)
-    sums = await session.execute(select(func.count(Receipt.id), func.sum(receipt_amount)).where(Receipt.user_id == user_id))
-    count, cents = sums.one()
+    total, count = await get_receipt_totals(session, user_id)
     items = await session.scalar(select(func.count(Item.id)).join(Receipt).where(Receipt.user_id == user_id))
 
     category = func.trim(Item.category)
-    category_amount = func.sum(cast(func.round(cast(Item.total, Numeric) * 100), BigInteger))
+    category_amount = func.sum(amount_in_kopecks(Item.total))
     top = await session.scalar(select(category).join(Receipt).where(Receipt.user_id == user_id, category != "")
                                .group_by(category).having(category_amount > 0)
                                .order_by(category_amount.desc(), category).limit(1))
-    return dict(receipts_count=count, total_spent=Decimal(cents or 0).scaleb(-2), items_count=items, top_category=top)
+    return dict(receipts_count=count, total_spent=total, items_count=items, top_category=top)
 
 
 async def export_receipts(session: AsyncSession, user_id: int) -> list[Receipt]:

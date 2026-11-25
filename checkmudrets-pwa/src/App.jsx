@@ -10,11 +10,11 @@ import Loader from './components/Loader';
 import { Button } from './components/ui';
 import Home from './pages/Home';
 import Scan from './pages/Scan';
-import History from './pages/History';
 import usePwaInstall from './utils/usePwaInstall';
 
 const Profile = lazy(() => import('./pages/Profile'));
 const Stats = lazy(() => import('./pages/Stats'));
+const History = lazy(() => import('./pages/History'));
 
 export default function App() {
   return <AuthProvider><AppGate /></AuthProvider>;
@@ -72,14 +72,27 @@ function DeletionPending() {
 
 function BudgetApp({ userId, profile, installation }) {
   const [page, setPage] = useState('home');
+  const [receiptsRevision, setReceiptsRevision] = useState(0);
+  const [statsPeriod, setStatsPeriod] = useState(null);
+  const [adviceOpened, setAdviceOpened] = useState(false);
+
+  function refreshReceipts() {
+    setReceiptsRevision((revision) => revision + 1);
+  }
+
+  function navigate(target, period) {
+    if (period) setStatsPeriod(period);
+    setPage(target);
+  }
 
   const renderPage = () => {
     switch (page) {
-      case 'scan': return <Scan onNavigate={setPage} userId={userId} />;
-      case 'history': return <History onNavigate={setPage} />;
-      case 'stats': return <Stats onNavigate={setPage} />;
-      case 'profile': return <Profile profile={profile} userId={userId} installation={installation} />;
-      default: return <Home onNavigate={setPage} userName={profile.name} />;
+      case 'scan': return <Scan onNavigate={setPage} userId={userId} onReceiptsChanged={refreshReceipts} />;
+      case 'history': return <History onNavigate={setPage} userId={userId} receiptsRevision={receiptsRevision} onReceiptsChanged={refreshReceipts} />;
+      case 'stats': return <Stats onNavigate={setPage} receiptsRevision={receiptsRevision} period={statsPeriod}
+        onPeriodChange={setStatsPeriod} adviceOpened={adviceOpened} onOpenAdvice={() => setAdviceOpened(true)} />;
+      case 'profile': return <Profile profile={profile} userId={userId} installation={installation} receiptsRevision={receiptsRevision} />;
+      default: return <Home onNavigate={navigate} userName={profile.name} receiptsRevision={receiptsRevision} />;
     }
   };
 

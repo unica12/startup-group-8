@@ -7,6 +7,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, relationship
 
+from utils.receipt_dates import reporting_day
+
 
 class Base(DeclarativeBase):
     pass
@@ -78,6 +80,10 @@ class Receipt(Base):
         "Item", back_populates="receipt",
         lazy="selectin", cascade="all, delete-orphan"
     )
+
+    @property
+    def accounting_date(self):
+        return self.date if self.draft_id is not None and self.date is not None else reporting_day(self.created_at)
 
     def __repr__(self) -> str:
         return f"<Receipt id={self.id} store={self.store_name} total={self.total}>"

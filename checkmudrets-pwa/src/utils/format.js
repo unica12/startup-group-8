@@ -1,4 +1,3 @@
-const moneyFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
 const decimalFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 2 });
 
 export function formatDecimal(value) {
@@ -9,15 +8,19 @@ export function formatExactMoney(value) {
   return `${formatDecimal(value)} ₽`;
 }
 
-/** 1234.5 → «1 235 ₽» (обычный пробел как разделитель тысяч) */
-export function formatMoney(n) {
-  return moneyFmt.format(Math.round(Number(n) || 0)).replace(/ | /g, ' ') + ' ₽';
-}
-
 export const MONTHS_NOMINATIVE = [
   'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
   'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
 ];
+
+const reportingMonth = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', year: 'numeric', month: 'numeric' });
+
+export function currentMonthIndex() {
+  const parts = reportingMonth.formatToParts(new Date());
+  const year = Number(parts.find(({ type }) => type === 'year').value);
+  const month = Number(parts.find(({ type }) => type === 'month').value);
+  return year * 12 + month - 1;
+}
 
 /** «Расходы за ноябрь» */
 const MONTHS_ACCUSATIVE = [

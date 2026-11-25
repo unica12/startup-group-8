@@ -18,3 +18,10 @@ export function editorPayload(data) {
   const { items, ...receipt } = data;
   return { ...clean(receipt), items: items.map(({ editorKey: _key, ...item }) => clean(item)) };
 }
+
+export function editSavedReceipt({ store_name, date, total, discount, items }) {
+  return {
+    store_name, date, total, discount,
+    items: items.map(({ id, ...item }) => ({ ...item, editorKey: id })),
+  };
+}

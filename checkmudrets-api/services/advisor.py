@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 from collections import OrderedDict
+from weakref import WeakValueDictionary
 
 from openai import AsyncOpenAI
 
@@ -18,8 +19,21 @@ _cached: OrderedDict[int, tuple[str, list[Insight]]] = OrderedDict()
 _pending: dict[tuple[int, str], asyncio.Task] = {}
 
 
+class AdviceSnapshot:
+    pass
+
+
+_snapshots: WeakValueDictionary[int, AdviceSnapshot] = WeakValueDictionary()
+
+
+def advice_snapshot(user_id: int) -> AdviceSnapshot:
+    # Снимок живёт, пока запрос рассчитывает инсайты, и сбрасывается при записи чека.
+    return _snapshots.setdefault(user_id, AdviceSnapshot())
+
+
 def clear_advice_cache(user_id: int) -> None:
     _cached.pop(user_id, None)
+    _snapshots.pop(user_id, None)
     for key in [key for key in _pending if key[0] == user_id]:
         _pending.pop(key)
 
@@ -74,8 +88,8 @@ async def _choose(insights: list[Insight]) -> list[Insight]:
         return insights
 
 
-async def generate_advice(user_id: int, insights: list[Insight]) -> list[Insight]:
-    if not insights:
+async def generate_advice(user_id: int, insights: list[Insight], snapshot: AdviceSnapshot | None = None) -> list[Insight]:
+    if not insights or (snapshot is not None and _snapshots.get(user_id) is not snapshot):
         return insights
     serialized = json.dumps([item.model_dump(mode="json") for item in insights], ensure_ascii=False, sort_keys=True)
     key = hashlib.sha256(serialized.encode()).hexdigest()

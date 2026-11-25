@@ -69,6 +69,7 @@ class ReceiptResponse(BaseModel):
     id: int
     store_name: Optional[str]
     date: Optional[date]
+    accounting_date: date
     total: float
     discount: float | None
     items: List[ItemResponse] = Field(default_factory=list)
@@ -90,6 +91,7 @@ class RecognizeReceiptResponse(BaseModel):
 class ReceiptsListResponse(BaseModel):
     receipts: List[ReceiptResponse]
     total_count: int
+    categories: list[str]
 
 
 class ExportConsent(BaseModel):
@@ -129,7 +131,7 @@ class LargestPurchase(BaseModel):
 
 
 class StatsResponse(BaseModel):
-    month: str  # "2026-04"
+    month: str | None  # "2026-04" или null за всё время
     total_spent: float
     receipts_count: int
     average_receipt: float

@@ -129,7 +129,9 @@ class AuthTests(unittest.TestCase):
         first, second = self.auth(), self.auth()
         owner = self.accept(first).json()
         self.assertTrue(self.accept(second).json()["consents_complete"])
-        today = date.today()
+        from utils.receipt_dates import reporting_day
+
+        today = reporting_day()
         parsed = {"store_name": "Тестовый магазин", "date": today.isoformat(),
                   "total": "26", "items": [{
             "raw_name": "Кофе тест молотый 250г", "name": "Кофе Тест молотый 250 г", "brand": "Тест",
@@ -202,7 +204,9 @@ class AuthTests(unittest.TestCase):
 
         headers = self.auth()
         self.accept(headers)
-        now = date.today()
+        from utils.receipt_dates import reporting_day
+
+        now = reporting_day()
         previous = now.replace(day=1) - timedelta(days=1)
         draft = ReceiptInput.model_validate({"date": now.isoformat(), "total": "30", "items": [
             {"raw_name": "Тестовая позиция", "name": "Тестовая позиция", "total": "30", "category": "Продукты"},
@@ -222,6 +226,116 @@ class AuthTests(unittest.TestCase):
         self.assertEqual(self.client.get("/stats", headers=headers).json()["receipts_count"], 0)
         old_month = self.client.get("/stats", headers=headers, params={"month": previous.strftime("%Y-%m")}).json()
         self.assertEqual(old_month["total_spent"], 30)
+
+    def test_receipt_periods_and_totals_follow_add_edit_and_delete(self):
+        from decimal import Decimal
+        from schemas.receipt_input import ReceiptInput
+        from services.advisor import _cached, clear_advice_cache
+
+        headers, other = self.auth(), self.auth()
+        user_id = self.accept(headers).json()["id"]
+        other_id = self.accept(other).json()["id"]
+        self.addCleanup(clear_advice_cache, user_id)
+        self.addCleanup(clear_advice_cache, other_id)
+
+        def purchase(day, amount):
+            return {"date": day, "store_name": "Тестовый магазин", "total": amount, "items": [{
+                "name": "Молоко Утро 500 мл", "brand": "Утро", "quantity": "1", "unit": "шт",
+                "price": amount, "total": amount, "category": "Молочные",
+                "package_size": "500", "package_unit": "мл",
+            }]}
+
+        def save(payload, actor=headers):
+            with patch("routers.receipts.recognize_receipt", AsyncMock(return_value=(ReceiptInput.model_validate(payload), [], False))):
+                draft = self.client.post("/receipts/recognize", headers=actor,
+                    files={"file": ("receipt.png", b"synthetic", "image/png")}).json()
+            path = f'/receipts/{draft["draft_id"]}/confirm'
+            response = self.client.post(path, headers=actor, json={"receipt": payload})
+            self.assertEqual(response.status_code, 200)
+            return response.json()["receipt"]["id"], path
+
+        def totals(month, count, spent):
+            data = self.client.get("/stats", headers=headers, params={"month": month}).json()
+            self.assertEqual(data["receipts_count"], count)
+            self.assertEqual(Decimal(str(data["total_spent"])), Decimal(spent))
+
+        first, _ = save(purchase("2025-01-29", "11.01"))
+        save(purchase("2025-01-31", "12.02"))
+        save(purchase("2025-02-01", "20.03"))
+        save(purchase("2025-02-02", "21.04"))
+        save(purchase("2025-02-02", "179.00"), other)
+        totals("all", 4, "64.10")
+        self.assertEqual(self.client.get("/stats?month=all", headers=headers).json()["average_receipt"], 16.03)
+        totals("2025-01", 2, "23.03")
+        totals("2025-02", 2, "41.07")
+        self.assertEqual(self.client.get("/auth/me/stats", headers=headers).json()["total_spent"], "64.10")
+        history = self.client.get("/receipts?limit=2", headers=headers).json()
+        self.assertEqual((history["total_count"], len(history["receipts"])), (4, 2))
+        second_page = self.client.get("/receipts?limit=2&offset=2", headers=headers).json()
+        self.assertTrue({r["id"] for r in history["receipts"]}.isdisjoint(r["id"] for r in second_page["receipts"]))
+
+        _cached[user_id] = ("before-add", [])
+        _cached[other_id] = ("other", [])
+        extra = purchase("2025-02-07", "5.55")
+        added, confirm_path = save(extra)
+        self.assertNotIn(user_id, _cached)
+        totals("all", 5, "69.65")
+        totals("2025-02", 3, "46.62")
+
+        _cached[user_id] = ("before-edit", [])
+        edited = purchase("2025-02-03", "10.50")
+        path = f"/receipts/{first}"
+        self.assertEqual(self.client.patch(path, headers=other, json={"receipt": edited}).status_code, 404)
+        self.assertEqual(self.client.delete(path, headers=other).status_code, 404)
+        self.assertIn(user_id, _cached)
+        response = self.client.patch(path, headers=headers, json={"receipt": edited})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["accounting_date"], edited["date"])
+        self.assertNotIn(user_id, _cached)
+        totals("2025-01", 1, "12.02")
+        totals("2025-02", 4, "57.12")
+        totals("all", 5, "69.14")
+
+        _cached[user_id] = ("before-delete", [])
+        self.assertEqual(self.client.delete(f"/receipts/{added}", headers=headers).status_code, 204)
+        self.assertNotIn(user_id, _cached)
+        self.assertEqual(_cached[other_id][0], "other")
+        self.assertEqual(self.client.post(confirm_path, headers=headers, json={"receipt": extra}).status_code, 404)
+        totals("all", 4, "63.59")
+        totals("2025-02", 3, "51.57")
+        profile = self.client.get("/auth/me/stats", headers=headers).json()
+        self.assertEqual((profile["receipts_count"], profile["total_spent"], profile["items_count"]), (4, "63.59", 4))
+        self.assertEqual(self.client.get("/receipts", headers=other).json()["total_count"], 1)
+        self.assertEqual(self.client.get("/stats?month=all", headers=other).json()["total_spent"], 179)
+
+    def test_accounting_dates_use_moscow_for_scan_date_fallback(self):
+        from database.db import AsyncSessionFactory
+        from database.models import Receipt, ReceiptDraft
+
+        headers = self.auth()
+        user_id = self.accept(headers).json()["id"]
+
+        async def seed():
+            async with AsyncSessionFactory() as session:
+                draft = ReceiptDraft(id=uuid4(), user_id=user_id)
+                session.add(draft)
+                await session.flush()
+                session.add_all([
+                    Receipt(user_id=user_id, store_name="Старый чек", date=date(2025, 2, 10),
+                            created_at=datetime(2025, 1, 31, 20, 59, 59), total=100),
+                    Receipt(user_id=user_id, store_name="Без даты", draft_id=draft.id,
+                            created_at=datetime(2025, 1, 31, 21), total=200),
+                ])
+                await session.commit()
+
+        self.client.portal.call(seed)
+        listing = self.client.get("/receipts", headers=headers).json()
+        self.assertEqual([row["accounting_date"] for row in listing["receipts"]], ["2025-02-01", "2025-01-31"])
+        self.assertEqual(self.client.get("/stats?month=2025-01", headers=headers).json()["total_spent"], 100)
+        with patch("routers.stats.reporting_day", return_value=date(2025, 2, 1)):
+            self.assertEqual(self.client.get("/stats", headers=headers).json()["total_spent"], 200)
+        with patch("database.queries.reporting_day", return_value=date(2025, 2, 1)):
+            self.assertEqual(self.client.get("/report", headers=headers).json()["receipts_count"], 2)
 
     def seed_profile_receipts(self, owner, name, *, count=1):
         from database.db import AsyncSessionFactory

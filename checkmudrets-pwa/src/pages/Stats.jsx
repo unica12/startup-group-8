@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ChevronLeft, ChevronRight, Lightbulb } from 'lucide-react';
 import { getStats, getAdvice } from '../services/api';
-import { formatMoney, MONTHS_NOMINATIVE, toChartSegments } from '../utils/format';
+import { currentMonthIndex, formatExactMoney, MONTHS_NOMINATIVE, toChartSegments } from '../utils/format';
 import Loader from '../components/Loader';
 import EmptyState from '../components/EmptyState';
 import ErrorState from '../components/ErrorState';
@@ -19,50 +19,51 @@ function Metric({ label, value }) {
   );
 }
 
-export default function Stats({ onNavigate }) {
-  const [currentMonth] = useState(() => {
-    const now = new Date();
-    return now.getFullYear() * 12 + now.getMonth();
-  });
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth);
-  const [result, setResult] = useState(null);
+export default function Stats({ onNavigate, period, onPeriodChange, receiptsRevision, adviceOpened, onOpenAdvice }) {
+  const currentMonth = currentMonthIndex();
+  const selectedMonth = period?.month ?? currentMonth;
+  const allTime = period?.allTime ?? false;
+  const [statsResult, setStatsResult] = useState(null);
   const [attempt, setAttempt] = useState(0);
-  const [advice, setAdvice] = useState(null);
+  const [adviceResult, setAdviceResult] = useState(null);
+  const [adviceAttempt, setAdviceAttempt] = useState(0);
   const year = Math.floor(selectedMonth / 12);
   const month = selectedMonth % 12;
   const monthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+  const requestedPeriod = allTime ? 'all' : monthStr;
   const isCurrentMonth = selectedMonth === currentMonth;
+  const statsKey = `${requestedPeriod}:${attempt}:${receiptsRevision}`;
+  const adviceKey = `${adviceAttempt}:${receiptsRevision}`;
+  const result = statsResult?.key === statsKey ? statsResult : null;
+  const advice = adviceResult?.key === adviceKey ? adviceResult : null;
 
   useEffect(() => {
     const controller = new AbortController();
-    getStats(monthStr, controller.signal)
+    getStats(requestedPeriod, controller.signal)
       .then((stats) => {
-        if (!controller.signal.aborted) setResult({ stats });
+        if (!controller.signal.aborted) setStatsResult({ key: statsKey, stats });
       })
       .catch(() => {
-        if (!controller.signal.aborted) setResult({ error: true });
+        if (!controller.signal.aborted) setStatsResult({ key: statsKey, error: true });
       });
     return () => controller.abort();
-  }, [monthStr, attempt]);
+  }, [requestedPeriod, statsKey]);
 
-  function changeMonth(delta) {
-    setResult(null);
-    setSelectedMonth((value) => value + delta);
-  }
+  useEffect(() => {
+    if (!adviceOpened) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    getAdvice({ personalize: true, signal }).then((data) => {
+      if (!signal.aborted) setAdviceResult({ key: adviceKey, data });
+    }).catch(() => {
+      if (!signal.aborted) setAdviceResult({ key: adviceKey, error: true });
+    });
+    return () => controller.abort();
+  }, [adviceOpened, adviceKey]);
 
   function retry() {
-    setResult(null);
     setAttempt((value) => value + 1);
   }
-
-  const loadAdvice = async () => {
-    setAdvice({ loading: true });
-    try {
-      setAdvice({ data: await getAdvice({ personalize: true }) });
-    } catch {
-      setAdvice({ error: true });
-    }
-  };
 
   const stats = result?.stats;
   const segments = stats ? toChartSegments(stats.by_category, 6) : [];
@@ -71,38 +72,44 @@ export default function Stats({ onNavigate }) {
     <div className="px-4 pt-5 pb-6 max-w-lg mx-auto flex flex-col gap-4">
       <h1 className="text-[28px]">Статистика</h1>
 
-      <Card padding="p-1.5" className="flex items-center justify-between">
-        <Button size="sm" variant="ghost" onClick={() => changeMonth(-1)} aria-label="Предыдущий месяц">
+      <div className="grid grid-cols-2 gap-2" role="group" aria-label="Период статистики">
+        <Button size="sm" variant={allTime ? 'secondary' : 'ghost'} aria-pressed={!allTime}
+          onClick={() => onPeriodChange({ month: selectedMonth, allTime: false })}>По месяцам</Button>
+        <Button size="sm" variant={allTime ? 'ghost' : 'secondary'} aria-pressed={allTime}
+          onClick={() => onPeriodChange({ month: selectedMonth, allTime: true })}>За всё время</Button>
+      </div>
+      {!allTime && <Card padding="p-1.5" className="flex items-center justify-between">
+        <Button size="sm" variant="ghost" onClick={() => onPeriodChange({ month: selectedMonth - 1, allTime: false })} aria-label="Предыдущий месяц">
           <ChevronLeft size={20} aria-hidden="true" />
         </Button>
         <span className="font-extrabold" aria-live="polite">{MONTHS_NOMINATIVE[month]} {year}</span>
         <Button
           size="sm"
           variant="ghost"
-          onClick={() => changeMonth(1)}
+          onClick={() => onPeriodChange({ month: selectedMonth + 1, allTime: false })}
           disabled={isCurrentMonth}
           aria-label="Следующий месяц"
         >
           <ChevronRight size={20} aria-hidden="true" />
         </Button>
-      </Card>
+      </Card>}
 
       {!result ? (
         <Loader text="Загружаем статистику..." />
       ) : result.error ? (
-        <ErrorState message="Не удалось загрузить статистику за этот месяц." onRetry={retry} />
+        <ErrorState message="Не удалось загрузить статистику за выбранный период." onRetry={retry} />
       ) : stats.receipts_count === 0 ? (
         <EmptyState
-          title="Нет данных за этот месяц"
+          title={allTime ? 'Чеков пока нет' : 'Нет данных за этот месяц'}
           text="Сфоткай чеки, чтобы увидеть, куда уходят деньги"
           action={isCurrentMonth && <Button onClick={() => onNavigate('scan')}>Сфоткать чек</Button>}
         />
       ) : (
         <>
           <div className="grid grid-cols-3 gap-2.5">
-            <Metric label="Потрачено" value={formatMoney(stats.total_spent)} />
+            <Metric label="Потрачено" value={formatExactMoney(stats.total_spent)} />
             <Metric label="Чеков" value={stats.receipts_count} />
-            <Metric label="Средний чек" value={formatMoney(stats.average_receipt)} />
+            <Metric label="Средний чек" value={formatExactMoney(stats.average_receipt)} />
           </div>
 
           <Card as="section">
@@ -111,10 +118,10 @@ export default function Stats({ onNavigate }) {
               <div className="flex flex-col items-center gap-5 mt-4">
                 <DonutChart segments={segments} size={176} stroke={28}>
                   <span className="text-[11px] font-bold text-text-muted">Всего</span>
-                  <span className="num max-w-full text-[19px] font-extrabold tracking-[-0.04em]">{formatMoney(stats.total_spent)}</span>
+                  <span className="num max-w-full text-[19px] font-extrabold tracking-[-0.04em]">{formatExactMoney(stats.total_spent)}</span>
                 </DonutChart>
                 <div className="w-full">
-                  <ChartLegend segments={segments} showAmount formatMoney={formatMoney} />
+                  <ChartLegend segments={segments} showAmount formatMoney={formatExactMoney} />
                 </div>
               </div>
             ) : <p className="mt-3 text-sm text-text-soft">Пока нет расходов по категориям.</p>}
@@ -127,7 +134,7 @@ export default function Stats({ onNavigate }) {
                 {stats.by_category.map(({ category, emoji, amount }) => (
                   <li key={category} className="flex items-center justify-between gap-3 py-2">
                     <span className="font-bold wrap-anywhere"><span aria-hidden="true">{emoji}</span> {category}</span>
-                    <span className="num font-extrabold text-right wrap-anywhere">{formatMoney(amount)}</span>
+                    <span className="num font-extrabold text-right wrap-anywhere">{formatExactMoney(amount)}</span>
                   </li>
                 ))}
               </ul>
@@ -141,7 +148,7 @@ export default function Stats({ onNavigate }) {
                 <p className="text-[12px] font-bold text-text-muted">Самая дорогая покупка</p>
                 <p className="font-extrabold text-[15px] wrap-anywhere">{stats.largest_purchase.name}</p>
               </div>
-              <span className="num ml-auto font-extrabold text-right wrap-anywhere">{formatMoney(stats.largest_purchase.amount)}</span>
+              <span className="num ml-auto font-extrabold text-right wrap-anywhere">{formatExactMoney(stats.largest_purchase.amount)}</span>
             </Card>
           )}
 
@@ -155,9 +162,9 @@ export default function Stats({ onNavigate }) {
             <p className="text-xs text-text-soft">По истории покупок до сегодняшнего дня</p>
           </div>
         </div>
-        {!advice && <Button variant="ghost" onClick={loadAdvice}><Lightbulb size={18} /> Открыть финансовые инсайты</Button>}
-        {advice?.loading && <Loader text="Подбираем рекомендации..." />}
-        {advice?.error && <ErrorState message="Не удалось загрузить инсайты." onRetry={loadAdvice} />}
+        {!adviceOpened && <Button variant="ghost" onClick={onOpenAdvice}><Lightbulb size={18} /> Открыть финансовые инсайты</Button>}
+        {adviceOpened && !advice && <Loader text="Подбираем рекомендации..." />}
+        {advice?.error && <ErrorState message="Не удалось загрузить инсайты." onRetry={() => setAdviceAttempt((value) => value + 1)} />}
         {advice?.data && <InsightList data={advice.data} />}
       </section>
     </div>

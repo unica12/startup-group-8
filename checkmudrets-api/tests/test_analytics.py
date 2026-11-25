@@ -87,6 +87,30 @@ class AnalyticsTests(unittest.TestCase):
 
 
 class AdvisorTests(unittest.IsolatedAsyncioTestCase):
+    async def test_invalidated_inflight_result_cannot_fill_the_cache(self):
+        from services.advisor import _cached, advice_snapshot, clear_advice_cache, generate_advice
+
+        rows = [receipt(1, TODAY, "Магазин 1", line(price=80)), receipt(2, TODAY, "Магазин 2", line(price=100))]
+        insights = calculate_insights(rows, TODAY)
+        started, finish = asyncio.Event(), asyncio.Event()
+        snapshot = advice_snapshot(12347)
+
+        async def choose_old(values):
+            started.set()
+            await finish.wait()
+            return values
+
+        with patch("services.advisor._choose", side_effect=choose_old):
+            pending = asyncio.create_task(generate_advice(12347, insights, snapshot))
+            await started.wait()
+            clear_advice_cache(12347)
+            finish.set()
+            await pending
+        self.assertNotIn(12347, _cached)
+        with patch("services.advisor._choose", AsyncMock()) as choose:
+            self.assertEqual(await generate_advice(12347, insights, snapshot), insights)
+            choose.assert_not_called()
+
     async def test_choices_are_cached_per_account_and_changed_facts_are_refreshed(self):
         with patch.dict("os.environ", {"OPENAI_API_KEY": "test-only", "PYTHON_DOTENV_DISABLED": "1"}):
             from services.advisor import generate_advice

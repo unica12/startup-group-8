@@ -1,5 +1,5 @@
 """Финансовые инсайты из подтверждённых чеков."""
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,9 +8,10 @@ from database.db import get_session
 from database.models import User
 from database.queries import get_analysis_receipts
 from schemas.models import AdviceResponse
-from services.advisor import clear_advice_cache, generate_advice
+from services.advisor import advice_snapshot, clear_advice_cache, generate_advice
 from services.analytics import EMPTY_MESSAGE, calculate_insights
 from services.auth import ensure_account_available, require_consents
+from utils.receipt_dates import reporting_day
 
 router = APIRouter(prefix="/advice", tags=["advice"])
 
@@ -21,12 +22,13 @@ async def get_advice(
     user: User = Depends(require_consents),
     session: AsyncSession = Depends(get_session),
 ) -> AdviceResponse:
-    today = date.today()
+    today = reporting_day()
+    snapshot = advice_snapshot(user.id) if personalize else None
     receipts = await get_analysis_receipts(session, user.id, today)
     await session.commit()
     insights = calculate_insights(receipts, today)
     if personalize:
-        insights = await generate_advice(user.id, insights)
+        insights = await generate_advice(user.id, insights, snapshot)
         try:
             await ensure_account_available(session, user.auth_user_id)
         except HTTPException:

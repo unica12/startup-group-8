@@ -77,8 +77,8 @@ export default function ReceiptEditor({
   return (
     <form className="grid gap-4 min-w-0" noValidate onSubmit={(event) => { event.preventDefault(); onConfirm(); }}>
       <Card padding="p-4">
-        <h2 className="text-xl">Проверь чек</h2>
-        <p className="text-sm text-text-soft mt-1">Сверь поля с фото. Чек появится в истории после сохранения.</p>
+        <h2 className="text-xl">{onRepeat ? 'Проверь чек' : 'Редактирование чека'}</h2>
+        {onRepeat && <p className="text-sm text-text-soft mt-1">Сверь поля с фото. Чек появится в истории после сохранения.</p>}
         {retried && <p className="text-xs text-text-muted mt-2">Распознавание автоматически повторилось для проверки.</p>}
         {photo && <details className="mt-3"><summary className="cursor-pointer text-sm font-bold text-brand">Посмотреть фото</summary>{photo}</details>}
         <fieldset disabled={busy} className="grid gap-3 mt-4 min-w-0">
@@ -125,11 +125,11 @@ export default function ReceiptEditor({
         </Button>
       </fieldset>
       {error && <ErrorState message={error} />}
-      <Button type="submit" disabled={busy}>{busy ? 'Сохраняем…' : 'Подтвердить и сохранить'}</Button>
-      <Button variant="secondary" disabled={busy} onClick={onRepeat}>
+      <Button type="submit" disabled={busy}>{busy ? 'Сохраняем…' : onRepeat ? 'Подтвердить и сохранить' : 'Сохранить изменения'}</Button>
+      {onRepeat && <Button variant="secondary" disabled={busy} onClick={onRepeat}>
         <RefreshCw size={17} aria-hidden="true" /> Повторить распознавание
-      </Button>
-      <Button variant="ghost" disabled={busy} onClick={onReset}>Выбрать другое фото</Button>
+      </Button>}
+      <Button variant="ghost" disabled={busy} onClick={onReset}>{onRepeat ? 'Выбрать другое фото' : 'Отмена'}</Button>
     </form>
   );
 }

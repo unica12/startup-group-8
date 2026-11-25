@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from schemas.receipt_input import ReceiptInput, ReceiptLine, ReceiptWarning
 from utils.formatting import CATEGORY_EMOJI
+from utils.receipt_dates import reporting_day
 
 CENT = Decimal("0.01")
 ZERO = Decimal(0)
@@ -49,10 +50,10 @@ def normalize_ocr_name(raw: str | None, proposed: str | None) -> str | None:
 
 
 def validate_receipt(receipt: ReceiptInput, today: date | None = None) -> list[ReceiptWarning]:
-    today = today or date.today()
+    today = today or reporting_day()
     warnings = []
     if receipt.date is None:
-        warnings.append(ReceiptWarning(message="Дата покупки неизвестна. Такой чек не участвует в аналитике по датам."))
+        warnings.append(ReceiptWarning(message="Дата покупки неизвестна. Расходы будут учтены по дате сохранения. Для сравнения покупок нужна дата из чека."))
     elif receipt.date > today:
         warnings.append(ReceiptWarning(message="Дата покупки позже сегодняшнего дня. Проверь дату на чеке.", blocking=True, retry=True))
     if not receipt.items:

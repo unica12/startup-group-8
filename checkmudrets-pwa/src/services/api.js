@@ -80,8 +80,19 @@ export async function confirmReceipt(draftId, receipt, acceptWarnings, userId) {
   }, session);
 }
 
-export function getReceipts(limit = 20, signal) {
-  return request(`/receipts?limit=${limit}`, { signal });
+export async function updateReceipt(receiptId, receipt, acceptWarnings, userId) {
+  return request(`/receipts/${receiptId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ receipt, accept_warnings: acceptWarnings }),
+  }, await getSession(userId));
+}
+
+export async function deleteReceipt(receiptId, userId) {
+  return request(`/receipts/${receiptId}`, { method: 'DELETE' }, await getSession(userId));
+}
+
+export function getReceipts(limit = 20, signal, offset = 0) {
+  return request(`/receipts?limit=${limit}&offset=${offset}`, { signal });
 }
 
 export function getStats(month = '', signal) {

@@ -49,31 +49,32 @@ function Settings({ title, children }) {
   );
 }
 
-function Achievements({ userId }) {
-  const [data, setData] = useState(null);
-  const [failed, setFailed] = useState(false);
+function Achievements({ userId, receiptsRevision }) {
+  const [result, setResult] = useState(null);
   const [attempt, setAttempt] = useState(0);
+  const requestKey = `${userId}:${attempt}:${receiptsRevision}`;
+  const { data, failed } = result?.key === requestKey ? result : {};
   useEffect(() => {
     const controller = new AbortController();
     getProfileStats(userId, controller.signal).then((stats) => {
-      if (!controller.signal.aborted) setData(stats);
+      if (!controller.signal.aborted) setResult({ key: requestKey, data: stats });
     }).catch(() => {
-      if (!controller.signal.aborted) setFailed(true);
+      if (!controller.signal.aborted) setResult({ key: requestKey, failed: true });
     });
     return () => controller.abort();
-  }, [userId, attempt]);
+  }, [userId, requestKey]);
 
   function retry() {
-    setFailed(false);
     setAttempt((value) => value + 1);
   }
 
   return (
     <Card as="section" padding="p-4">
       <h2 className="text-lg">Мои достижения</h2>
+      <p className="mt-0.5 text-xs text-text-soft">За всё время</p>
       {failed ? <div className="mt-3"><ErrorState message="Не удалось загрузить статистику." onRetry={retry} /></div>
         : !data ? <Loader text="Считаем покупки…" />
-          : data.receipts_count === 0 ? <p className="mt-2 text-sm text-text-soft">Пока нет сохранённых чеков. Здесь появятся расходы и покупки за всё время.</p>
+          : data.receipts_count === 0 ? <p className="mt-2 text-sm text-text-soft">Пока нет сохранённых чеков.</p>
             : <dl className="mt-3 grid grid-cols-2 gap-2">
               {[
                 ['Сохранено чеков', countFormat.format(data.receipts_count)],
@@ -140,7 +141,7 @@ function downloadExport(data) {
   setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
-export default function Profile({ profile, userId, installation }) {
+export default function Profile({ profile, userId, installation, receiptsRevision }) {
   const { signOut } = useAuth();
   const [screen, setScreen] = useState('');
   const [notice, setNotice] = useState('');
@@ -231,7 +232,7 @@ export default function Profile({ profile, userId, installation }) {
           </Button>
         </Card>
 
-        <Achievements userId={userId} />
+        <Achievements userId={userId} receiptsRevision={receiptsRevision} />
         <Settings title="Настройки аккаунта">
           <Setting icon={Pencil} onClick={() => open('name')}>Редактировать имя</Setting>
           <Setting icon={KeyRound} onClick={() => open('password')}>Изменить пароль</Setting>
